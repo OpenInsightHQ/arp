@@ -1,0 +1,1508 @@
+import { EventEmitter } from 'events';
+import { logger } from '@librechat/data-schemas';
+import { fetch as undiciFetch, Agent } from 'undici';
+import {
+  StdioClientTransport,
+  getDefaultEnvironment,
+} from '@modelcontextprotocol/sdk/client/stdio.js';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
+import { WebSocketClientTransport } from '@modelcontextprotocol/sdk/client/websocket.js';
+import { ResourceListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
+import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js';
+import type {
+  RequestInit as UndiciRequestInit,
+  RequestInfo as UndiciRequestInfo,
+  Response as UndiciResponse,
+} from 'undici';
+import type { MCPOAuthTokens } from './oauth/types';
+import { withTimeout } from '~/utils/promise';
+import type * as t from './types';
+import { createSSRFSafeUndiciConnect, resolveHostnameSSRF } from '~/auth';
+import { sanitizeUrlForLogging } from './utils';
+import { mcpConfig } from './mcpConfig';
+
+type FetchLike = (url: string | URL, init?: RequestInit) => Promise<Response>;
+
+/**
+ * Reads the first complete SSE event from a stream, then cancels the stream.
+ *
+ * SSE events are terminated by a blank line. Since SSE streams stay open
+ * indefinitely, we read chunks until we find a blank-line delimiter, then
+ * cancel the reader to free the connection.
+ *
+ * Includes a timeout safeguard: if no complete event is found within
+ * READ_TIMEOUT_MS, returns whatever data was accumulated so far.
+ *
+ * @param body The readable stream from a fetch Response
+ * @returns The raw text of the first SSE event (e.g. "event: message\ndata: {...}")
+ */
+async function readFirstSSEEvent(body: ReadableStream): Promise<string> {
+  const READ_TIMEOUT_MS = 8_000;
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  const timeoutPromise = new Promise<string>((resolve) => {
+    setTimeout(() => {
+      if (buffer.length > 0) {
+        resolve(buffer);
+      } else {
+        resolve('');
+      }
+    }, READ_TIMEOUT_MS);
+  });
+
+  const readPromise = (async () => {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) {
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
+
+      /** SSE events are delimited by \n\n or \r\n\r\n */
+      const doubleNewline = buffer.indexOf('\n\n');
+      const crlfDouble = buffer.indexOf('\r\n\r\n');
+      const splitIndex = doubleNewline === -1 ? crlfDouble : doubleNewline;
+
+      if (splitIndex !== -1) {
+        return buffer.slice(0, splitIndex);
+      }
+
+      /**
+       * Fast path: if buffer already contains a complete JSON `data:` line,
+       * return immediately without waiting for the blank-line delimiter.
+       * Some SSE servers don't send the terminator promptly.
+       */
+      const dataMatch = buffer.match(/^data:\s*(.+)/m);
+      if (dataMatch && dataMatch[1].trim().endsWith('}')) {
+        return buffer;
+      }
+    }
+    return buffer;
+  })();
+
+  try {
+    return await Promise.race([readPromise, timeoutPromise]);
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+}
+
+/**
+ * Parses an SSE-formatted event string and extracts the `data:` payload
+ * as a JSON object. Returns null if no valid data is found.
+ *
+ * Handles SSE format:
+ * ```
+ * event: message
+ * data: {"jsonrpc":"2.0","id":1,"result":{...}}
+ * ```
+ */
+function parseSSEBodyToJson(event: string): unknown | null {
+  const lines = event.split('\n');
+  const dataLines: string[] = [];
+
+  for (const line of lines) {
+    const trimmed = line.replace(/\r$/, '');
+    if (trimmed.startsWith('data:')) {
+      dataLines.push(trimmed.slice(5).trimStart());
+    }
+  }
+
+  if (dataLines.length === 0) {
+    /** Fallback: might be raw JSON without SSE framing */
+    const trimmed = event.trim();
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      try {
+        return JSON.parse(trimmed);
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  try {
+    return JSON.parse(dataLines.join('\n'));
+  } catch {
+    return null;
+  }
+}
+
+function isStdioOptions(options: t.MCPOptions): options is t.StdioOptions {
+  return 'command' in options;
+}
+
+function isWebSocketOptions(options: t.MCPOptions): options is t.WebSocketOptions {
+  if ('url' in options) {
+    const protocol = new URL(options.url).protocol;
+    return protocol === 'ws:' || protocol === 'wss:';
+  }
+  return false;
+}
+
+function isSSEOptions(options: t.MCPOptions): options is t.SSEOptions {
+  if ('url' in options) {
+    const protocol = new URL(options.url).protocol;
+    return protocol !== 'ws:' && protocol !== 'wss:';
+  }
+  return false;
+}
+
+/**
+ * Checks if the provided options are for a Streamable HTTP transport.
+ *
+ * Streamable HTTP is an MCP transport that uses HTTP POST for sending messages
+ * and supports streaming responses. It provides better performance than
+ * SSE transport while maintaining compatibility with most network environments.
+ *
+ * @param options MCP connection options to check
+ * @returns True if options are for a streamable HTTP transport
+ */
+function isStreamableHTTPOptions(options: t.MCPOptions): options is t.StreamableHTTPOptions {
+  if ('url' in options && 'type' in options) {
+    const optionType = options.type as string;
+    if (optionType === 'streamable-http' || optionType === 'http') {
+      const protocol = new URL(options.url).protocol;
+      return protocol !== 'ws:' && protocol !== 'wss:';
+    }
+  }
+  return false;
+}
+
+const FIVE_MINUTES = 5 * 60 * 1000;
+const DEFAULT_TIMEOUT = 60000;
+/** SSE connections through proxies may need longer initial handshake time */
+const SSE_CONNECT_TIMEOUT = 120000;
+/** Default body timeout for Streamable HTTP GET SSE streams that idle between server pushes */
+const DEFAULT_SSE_READ_TIMEOUT = FIVE_MINUTES;
+
+/**
+ * Error message prefixes emitted by the MCP SDK's StreamableHTTPClientTransport
+ * (client/streamableHttp.ts → _handleSseStream / _scheduleReconnection).
+ * These are SDK-internal strings, not part of a public API. If the SDK changes
+ * them, suppression in setupTransportErrorHandlers will silently stop working.
+ */
+const SDK_SSE_STREAM_DISCONNECTED = 'SSE stream disconnected';
+const SDK_SSE_RECONNECT_FAILED = 'Failed to reconnect SSE stream';
+
+/**
+ * Headers for SSE connections.
+ *
+ * Headers we intentionally DO NOT include:
+ * - Accept: text/event-stream - Already set by eventsource library AND MCP SDK
+ * - X-Accel-Buffering: This is a RESPONSE header for Nginx, not a request header.
+ *   The upstream MCP server must send this header for Nginx to respect it.
+ * - Connection: keep-alive: Forbidden in HTTP/2 (RFC 7540 §8.1.2.2).
+ *   HTTP/2 manages connection persistence differently.
+ */
+const SSE_REQUEST_HEADERS = {
+  'Cache-Control': 'no-cache',
+};
+
+/**
+ * Extracts a meaningful error message from SSE transport errors.
+ * The MCP SDK's SSEClientTransport can produce "SSE error: undefined" when the
+ * underlying eventsource library encounters connection issues without a specific message.
+ *
+ * @returns Object containing:
+ *   - message: Human-readable error description
+ *   - code: HTTP status code if available
+ *   - isProxyHint: Whether this error suggests proxy misconfiguration
+ *   - isTransient: Whether this is likely a transient error that will auto-reconnect
+ */
+function extractSSEErrorMessage(error: unknown): {
+  message: string;
+  code?: number;
+  isProxyHint: boolean;
+  isTransient: boolean;
+} {
+  if (!error || typeof error !== 'object') {
+    return {
+      message: 'Unknown SSE transport error',
+      isProxyHint: true,
+      isTransient: true,
+    };
+  }
+
+  const errorObj = error as { message?: string; code?: number; event?: unknown };
+  const rawMessage = errorObj.message ?? '';
+  const code = errorObj.code;
+
+  /**
+   * Handle the common "SSE error: undefined" case.
+   * This typically occurs when:
+   * 1. A reverse proxy buffers the SSE stream (proxy issue)
+   * 2. The server closes an idle connection (normal SSE behavior)
+   * 3. Network interruption without specific error details
+   *
+   * In all cases, the eventsource library will attempt to reconnect automatically.
+   */
+  if (rawMessage === 'SSE error: undefined' || rawMessage === 'undefined' || !rawMessage) {
+    return {
+      message:
+        'SSE connection closed. This can occur due to: (1) idle connection timeout (normal), ' +
+        '(2) reverse proxy buffering (check proxy_buffering config), or (3) network interruption.',
+      code,
+      isProxyHint: true,
+      isTransient: true,
+    };
+  }
+
+  /**
+   * Check for timeout patterns. Use case-insensitive matching for common timeout error codes:
+   * - ETIMEDOUT: TCP connection timeout
+   * - ESOCKETTIMEDOUT: Socket timeout
+   * - "timed out" / "timeout": Generic timeout messages
+   */
+  const lowerMessage = rawMessage.toLowerCase();
+  if (
+    rawMessage.includes('ETIMEDOUT') ||
+    rawMessage.includes('ESOCKETTIMEDOUT') ||
+    lowerMessage.includes('timed out') ||
+    lowerMessage.includes('timeout after') ||
+    lowerMessage.includes('request timeout')
+  ) {
+    return {
+      message: `SSE connection timed out: ${rawMessage}. If behind a reverse proxy, increase proxy_read_timeout.`,
+      code,
+      isProxyHint: true,
+      isTransient: true,
+    };
+  }
+
+  // Connection reset is often transient (server restart, proxy reload)
+  if (rawMessage.includes('ECONNRESET')) {
+    return {
+      message: `SSE connection reset: ${rawMessage}. The server or proxy may have restarted.`,
+      code,
+      isProxyHint: false,
+      isTransient: true,
+    };
+  }
+
+  // Connection refused is more serious - server may be down
+  if (rawMessage.includes('ECONNREFUSED')) {
+    return {
+      message: `SSE connection refused: ${rawMessage}. Verify the MCP server is running and accessible.`,
+      code,
+      isProxyHint: false,
+      isTransient: false,
+    };
+  }
+
+  // DNS failure is usually a configuration issue, not transient
+  if (rawMessage.includes('ENOTFOUND') || rawMessage.includes('getaddrinfo')) {
+    return {
+      message: `SSE DNS resolution failed: ${rawMessage}. Check the server URL is correct.`,
+      code,
+      isProxyHint: false,
+      isTransient: false,
+    };
+  }
+
+  // Check for HTTP status codes in the message
+  const statusMatch = rawMessage.match(/\b(4\d{2}|5\d{2})\b/);
+  if (statusMatch) {
+    const statusCode = parseInt(statusMatch[1], 10);
+    // 5xx errors are often transient, 4xx are usually not
+    const isServerError = statusCode >= 500 && statusCode < 600;
+    return {
+      message: rawMessage,
+      code: statusCode,
+      isProxyHint: statusCode === 502 || statusCode === 503 || statusCode === 504,
+      isTransient: isServerError,
+    };
+  }
+
+  /**
+   * "fetch failed" is a generic undici TypeError that occurs when an in-flight HTTP request
+   * is aborted (e.g. after an MCP protocol-level timeout fires). The transport itself is still
+   * functional — only the individual request was lost — so treat this as transient.
+   */
+  if (rawMessage === 'fetch failed') {
+    return {
+      message:
+        'fetch failed (request aborted, likely after a timeout — connection may still be usable)',
+      code,
+      isProxyHint: false,
+      isTransient: true,
+    };
+  }
+
+  return {
+    message: rawMessage,
+    code,
+    isProxyHint: false,
+    isTransient: false,
+  };
+}
+
+interface MCPConnectionParams {
+  serverName: string;
+  serverConfig: t.MCPOptions;
+  userId?: string;
+  oauthTokens?: MCPOAuthTokens | null;
+  useSSRFProtection?: boolean;
+}
+
+export class MCPConnection extends EventEmitter {
+  public client: Client;
+  private options: t.MCPOptions;
+  private transport: Transport | null = null; // Make this nullable
+  private connectionState: t.ConnectionState = 'disconnected';
+  private connectPromise: Promise<void> | null = null;
+  private readonly MAX_RECONNECT_ATTEMPTS = 3;
+  public readonly serverName: string;
+  private shouldStopReconnecting = false;
+  private isReconnecting = false;
+  private isInitializing = false;
+  private reconnectAttempts = 0;
+  private agents: Agent[] = [];
+  private readonly userId?: string;
+  private lastPingTime: number;
+  private lastConnectionCheckAt: number = 0;
+  private oauthTokens?: MCPOAuthTokens | null;
+  private requestHeaders?: Record<string, string> | null;
+  private oauthRequired = false;
+  private readonly useSSRFProtection: boolean;
+  iconPath?: string;
+  timeout?: number;
+  sseReadTimeout?: number;
+  url?: string;
+
+  /**
+   * Timestamp when this connection was created.
+   * Used to detect if connection is stale compared to updated config.
+   */
+  public readonly createdAt: number;
+
+  setRequestHeaders(headers: Record<string, string> | null): void {
+    if (!headers) {
+      return;
+    }
+    const normalizedHeaders: Record<string, string> = {};
+    for (const [key, value] of Object.entries(headers)) {
+      normalizedHeaders[key.toLowerCase()] = value;
+    }
+    this.requestHeaders = normalizedHeaders;
+  }
+
+  getRequestHeaders(): Record<string, string> | null | undefined {
+    return this.requestHeaders;
+  }
+
+  constructor(params: MCPConnectionParams) {
+    super();
+    this.options = params.serverConfig;
+    this.serverName = params.serverName;
+    this.userId = params.userId;
+    this.useSSRFProtection = params.useSSRFProtection === true;
+    this.iconPath = params.serverConfig.iconPath;
+    this.timeout = params.serverConfig.timeout;
+    this.sseReadTimeout = params.serverConfig.sseReadTimeout;
+    this.lastPingTime = Date.now();
+    this.createdAt = Date.now(); // Record creation timestamp for staleness detection
+    if (params.oauthTokens) {
+      this.oauthTokens = params.oauthTokens;
+    }
+    this.client = new Client(
+      {
+        name: '@librechat/api-client',
+        version: '1.2.3',
+      },
+      {
+        capabilities: {},
+      },
+    );
+
+    this.setupEventListeners();
+  }
+
+  /** Helper to generate consistent log prefixes */
+  private getLogPrefix(): string {
+    const userPart = this.userId ? `[User: ${this.userId}]` : '';
+    return `[MCP]${userPart}[${this.serverName}]`;
+  }
+
+  /**
+   * Factory function to create fetch functions without capturing the entire `this` context.
+   * This helps prevent memory leaks by only passing necessary dependencies.
+   *
+   * When `sseBodyTimeout` is provided, a second Agent is created with a much longer
+   * body timeout for GET requests (the Streamable HTTP SSE stream). POST requests
+   * continue using the normal timeout so they fail fast on real errors.
+   */
+  private createFetchFunction(
+    getHeaders: () => Record<string, string> | null | undefined,
+    timeout?: number,
+    sseBodyTimeout?: number,
+  ): (input: UndiciRequestInfo, init?: UndiciRequestInit) => Promise<UndiciResponse> {
+    const ssrfConnect = this.useSSRFProtection ? createSSRFSafeUndiciConnect() : undefined;
+    const connectOpts = ssrfConnect != null ? { connect: ssrfConnect } : {};
+    const effectiveTimeout = timeout || DEFAULT_TIMEOUT;
+    const postAgent = new Agent({
+      bodyTimeout: effectiveTimeout,
+      headersTimeout: effectiveTimeout,
+      ...connectOpts,
+    });
+    this.agents.push(postAgent);
+
+    let getAgent: Agent | undefined;
+    if (sseBodyTimeout != null) {
+      getAgent = new Agent({
+        bodyTimeout: sseBodyTimeout,
+        headersTimeout: effectiveTimeout,
+        ...connectOpts,
+      });
+      this.agents.push(getAgent);
+    }
+
+    return function customFetch(
+      input: UndiciRequestInfo,
+      init?: UndiciRequestInit,
+    ): Promise<UndiciResponse> {
+      const isGet = (init?.method ?? 'GET').toUpperCase() === 'GET';
+      const dispatcher = isGet && getAgent ? getAgent : postAgent;
+
+      const requestHeaders = getHeaders();
+      if (!requestHeaders) {
+        return undiciFetch(input, { ...init, dispatcher });
+      }
+
+      let initHeaders: Record<string, string> = {};
+      if (init?.headers) {
+        if (init.headers instanceof Headers) {
+          initHeaders = Object.fromEntries(init.headers.entries());
+        } else if (Array.isArray(init.headers)) {
+          initHeaders = Object.fromEntries(init.headers);
+        } else {
+          initHeaders = init.headers as Record<string, string>;
+        }
+      }
+
+      return undiciFetch(input, {
+        ...init,
+        headers: {
+          ...initHeaders,
+          ...requestHeaders,
+        },
+        dispatcher,
+      });
+    };
+  }
+
+  /**
+   * Wraps a fetch function so that POST responses with `text/event-stream`
+   * Content-Type are converted to `application/json` responses.
+   *
+   * This is used for servers that respond to POST with SSE-formatted data
+   * but don't support GET (causing the legacy SSE transport to fail) and
+   * whose SSE format may not be parsed correctly by the SDK's internal
+   * _handleSseStream. By converting SSE to JSON at the fetch level, the
+   * SDK's reliable JSON parsing path is used instead.
+   *
+   * Only POST responses are converted. GET requests (used for the optional
+   * SSE stream in streamable-http) are passed through unchanged.
+   *
+   * SSE streams stay open indefinitely, so we read only the first complete
+   * event (terminated by a blank line) from the stream, then cancel it.
+   */
+  private wrapLegacySSEFetch(
+    fetchFn: (input: UndiciRequestInfo, init?: UndiciRequestInit) => Promise<UndiciResponse>,
+  ): (input: UndiciRequestInfo, init?: UndiciRequestInit) => Promise<UndiciResponse> {
+    return async (input, init) => {
+      const response = await fetchFn(input, init);
+      const method = (init?.method ?? 'GET').toUpperCase();
+
+      if (method !== 'POST') {
+        return response;
+      }
+
+      const contentType = response.headers.get('content-type') ?? '';
+      if (!contentType.includes('text/event-stream')) {
+        return response;
+      }
+
+      if (!response.body) {
+        logger.warn(`${this.getLogPrefix()} Legacy SSE: POST response has no body`);
+        return response;
+      }
+
+      logger.info(`${this.getLogPrefix()} Legacy SSE: reading first event from POST response`);
+      const firstEventData = await readFirstSSEEvent(
+        response.body as unknown as ReadableStream<Uint8Array>,
+      );
+      logger.info(
+        `${this.getLogPrefix()} Legacy SSE: extracted ${firstEventData.length} chars from stream`,
+      );
+
+      const jsonData = parseSSEBodyToJson(firstEventData);
+      if (jsonData === null) {
+        logger.warn(
+          `${this.getLogPrefix()} Legacy SSE: failed to parse SSE data, returning raw response`,
+        );
+        return response;
+      }
+
+      logger.info(`${this.getLogPrefix()} Legacy SSE: successfully converted to JSON`);
+
+      const responseHeaders: Record<string, string> = {
+        'content-type': 'application/json',
+      };
+      const sessionId = response.headers.get('mcp-session-id');
+      if (sessionId) {
+        responseHeaders['mcp-session-id'] = sessionId;
+      }
+
+      return new Response(JSON.stringify(jsonData), {
+        status: response.status,
+        statusText: response.statusText,
+        headers: responseHeaders,
+      }) as unknown as UndiciResponse;
+    };
+  }
+
+  private emitError(error: unknown, errorContext: string): void {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    logger.error(`${this.getLogPrefix()} ${errorContext}: ${errorMessage}`);
+  }
+
+  /**
+   * Probes an HTTP endpoint to detect whether it is a legacy SSE-only MCP server
+   * (protocol version 2024-11-05) rather than a proper streamable-http server.
+   *
+   * Sends a minimal initialize request via POST and inspects both the response
+   * Content-Type header and the first chunk of the body. Legacy SSE servers
+   * respond with `text/event-stream` Content-Type and/or body starting with
+   * `event:` / `data:` lines, while streamable-http servers respond with
+   * `application/json` Content-Type and a JSON body.
+   *
+   * @param url The MCP server URL to probe
+   * @param headers Extra request headers (OAuth, user headers)
+   * @returns true if the server appears to be a legacy SSE server
+   */
+  private async probeIsLegacySSE(url: URL, headers: Record<string, string>): Promise<boolean> {
+    const PROBE_TIMEOUT_MS = 10_000;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+
+    try {
+      if (this.useSSRFProtection) {
+        const isSSRF = await resolveHostnameSSRF(url.hostname);
+        if (isSSRF) {
+          logger.warn(
+            `${this.getLogPrefix()} SSRF protection: probe blocked for host "${url.hostname}"`,
+          );
+          return false;
+        }
+      }
+
+      const fetchHeaders: Record<string, string> = {
+        'Content-Type': 'application/json',
+        Accept: 'application/json, text/event-stream',
+        ...headers,
+      };
+      if (this.oauthTokens?.access_token) {
+        fetchHeaders['Authorization'] = `Bearer ${this.oauthTokens.access_token}`;
+      }
+
+      const response = await undiciFetch(url, {
+        method: 'POST',
+        headers: fetchHeaders,
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          method: 'initialize',
+          id: 1,
+          params: {
+            protocolVersion: '2025-03-26',
+            capabilities: {},
+            clientInfo: { name: '@librechat/api-client', version: '1.2.3' },
+          },
+        }),
+        signal: controller.signal,
+      });
+
+      const contentType = response.headers.get('content-type') ?? '';
+
+      /** Fast path: Content-Type header clearly indicates SSE */
+      if (contentType.includes('text/event-stream')) {
+        await response.body?.cancel().catch(() => {});
+        logger.info(
+          `${this.getLogPrefix()} Probe detected legacy SSE (Content-Type: text/event-stream)`,
+        );
+        return true;
+      }
+
+      /** Fast path: Content-Type header clearly indicates JSON */
+      if (contentType.includes('application/json')) {
+        await response.body?.cancel().catch(() => {});
+        return false;
+      }
+
+      /**
+       * Ambiguous Content-Type: peek at the first chunk of the body.
+       * SSE bodies start with `event:`, `data:`, or `:` (comment).
+       * JSON bodies start with `{` or `[`.
+       */
+      if (response.body) {
+        const reader = response.body.getReader();
+        try {
+          const { value: firstChunk } = await reader.read();
+          if (firstChunk) {
+            const text = new TextDecoder().decode(firstChunk).trimStart();
+            if (text.startsWith('event:') || text.startsWith('data:') || text.startsWith(':')) {
+              logger.info(
+                `${this.getLogPrefix()} Probe detected legacy SSE (body starts with SSE format)`,
+              );
+              return true;
+            }
+          }
+        } finally {
+          await response.body?.cancel().catch(() => {});
+        }
+      }
+
+      return false;
+    } catch (error) {
+      const errMsg = error instanceof Error ? error.message : String(error);
+      /**
+       * If the probe itself times out (POST gets no response), the server
+       * likely only accepts GET (legacy SSE pattern). Treat as legacy SSE.
+       */
+      if (errMsg.includes('aborted') || errMsg.includes('timeout')) {
+        logger.info(
+          `${this.getLogPrefix()} Probe timed out — treating as legacy SSE (server did not respond to POST)`,
+        );
+        return true;
+      }
+      logger.debug(`${this.getLogPrefix()} Streamable-http probe failed: ${errMsg}`);
+      return false;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private async constructTransport(options: t.MCPOptions): Promise<Transport> {
+    try {
+      let type: t.MCPOptions['type'];
+      let legacySSEMode = false;
+      if (isStdioOptions(options)) {
+        type = 'stdio';
+      } else if (isWebSocketOptions(options)) {
+        type = 'websocket';
+      } else if (isStreamableHTTPOptions(options)) {
+        type = 'streamable-http';
+      } else if (isSSEOptions(options)) {
+        type = 'sse';
+      } else {
+        throw new Error(
+          'Cannot infer transport type: options.type is not provided and cannot be inferred from other properties.',
+        );
+      }
+
+      /**
+       * Legacy SSE detection: some servers (e.g. mcp-searxng with protocol
+       * 2024-11-05) respond to POST with text/event-stream but return 405 on
+       * GET, making them incompatible with the legacy SSE transport. The
+       * streamable-http transport is correct, but its SSE stream parser can
+       * silently fail on these servers. When detected, we enable a fetch
+       * wrapper that converts SSE POST responses to JSON.
+       */
+      if (type === 'streamable-http' && isStreamableHTTPOptions(options)) {
+        const probeHeaders = { ...options.headers };
+        legacySSEMode = await this.probeIsLegacySSE(new URL(options.url), probeHeaders);
+        if (legacySSEMode) {
+          logger.info(
+            `${this.getLogPrefix()} Enabling SSE-to-JSON conversion for legacy SSE POST responses`,
+          );
+        }
+      }
+
+      switch (type) {
+        case 'stdio':
+          if (!isStdioOptions(options)) {
+            throw new Error('Invalid options for stdio transport.');
+          }
+          return new StdioClientTransport({
+            command: options.command,
+            args: options.args,
+            // workaround bug of mcp sdk that can't pass env:
+            // https://github.com/modelcontextprotocol/typescript-sdk/issues/216
+            env: { ...getDefaultEnvironment(), ...(options.env ?? {}) },
+          });
+
+        case 'websocket':
+          if (!isWebSocketOptions(options)) {
+            throw new Error('Invalid options for websocket transport.');
+          }
+          this.url = options.url;
+          if (this.useSSRFProtection) {
+            const wsHostname = new URL(options.url).hostname;
+            const isSSRF = await resolveHostnameSSRF(wsHostname);
+            if (isSSRF) {
+              throw new Error(
+                `SSRF protection: WebSocket host "${wsHostname}" resolved to a private/reserved IP address`,
+              );
+            }
+          }
+          return new WebSocketClientTransport(new URL(options.url));
+
+        case 'sse': {
+          if (!isSSEOptions(options)) {
+            throw new Error('Invalid options for sse transport.');
+          }
+          this.url = options.url;
+          const url = new URL(options.url);
+          logger.info(
+            `${this.getLogPrefix()} Creating SSE transport: ${sanitizeUrlForLogging(url)}`,
+          );
+          const abortController = new AbortController();
+
+          /** Add OAuth token to headers if available */
+          const headers = { ...options.headers };
+          if (this.oauthTokens?.access_token) {
+            headers['Authorization'] = `Bearer ${this.oauthTokens.access_token}`;
+          }
+
+          /**
+           * SSE connections need longer timeouts for reliability.
+           * The connect timeout is extended because proxies may delay initial response.
+           */
+          const sseTimeout = this.timeout || SSE_CONNECT_TIMEOUT;
+          const ssrfConnect = this.useSSRFProtection ? createSSRFSafeUndiciConnect() : undefined;
+          const sseAgent = new Agent({
+            bodyTimeout: sseTimeout,
+            headersTimeout: sseTimeout,
+            keepAliveTimeout: sseTimeout,
+            keepAliveMaxTimeout: sseTimeout * 2,
+            ...(ssrfConnect != null ? { connect: ssrfConnect } : {}),
+          });
+          this.agents.push(sseAgent);
+          const transport = new SSEClientTransport(url, {
+            requestInit: {
+              /** User/OAuth headers override SSE defaults */
+              headers: { ...SSE_REQUEST_HEADERS, ...headers },
+              signal: abortController.signal,
+            },
+            eventSourceInit: {
+              fetch: (url, init) => {
+                /** Merge headers: SSE defaults < init headers < user headers (user wins) */
+                const fetchHeaders = new Headers(
+                  Object.assign({}, SSE_REQUEST_HEADERS, init?.headers, headers),
+                );
+                return undiciFetch(url, {
+                  ...init,
+                  dispatcher: sseAgent,
+                  headers: fetchHeaders,
+                });
+              },
+            },
+            fetch: this.createFetchFunction(
+              this.getRequestHeaders.bind(this),
+              sseTimeout,
+            ) as unknown as FetchLike,
+          });
+
+          transport.onclose = () => {
+            logger.info(`${this.getLogPrefix()} SSE transport closed`);
+            this.emit('connectionChange', 'disconnected');
+          };
+
+          transport.onmessage = (message) => {
+            logger.info(`${this.getLogPrefix()} Message received: ${JSON.stringify(message)}`);
+          };
+
+          this.setupTransportErrorHandlers(transport);
+          return transport;
+        }
+
+        case 'streamable-http': {
+          if (!isStreamableHTTPOptions(options)) {
+            throw new Error('Invalid options for streamable-http transport.');
+          }
+          this.url = options.url;
+          const url = new URL(options.url);
+          logger.info(
+            `${this.getLogPrefix()} Creating streamable-http transport: ${sanitizeUrlForLogging(url)}`,
+          );
+          const abortController = new AbortController();
+
+          /** Add OAuth token to headers if available */
+          const headers = { ...options.headers };
+          if (this.oauthTokens?.access_token) {
+            headers['Authorization'] = `Bearer ${this.oauthTokens.access_token}`;
+          }
+
+          const baseFetch = this.createFetchFunction(
+            this.getRequestHeaders.bind(this),
+            this.timeout,
+            this.sseReadTimeout || DEFAULT_SSE_READ_TIMEOUT,
+          );
+
+          /**
+           * When legacy SSE mode is detected, wrap the fetch to convert SSE
+           * POST responses to JSON. This bypasses the SDK's _handleSseStream
+           * which can silently fail on certain SSE formats.
+           */
+          const finalFetch = legacySSEMode ? this.wrapLegacySSEFetch(baseFetch) : baseFetch;
+
+          const transport = new StreamableHTTPClientTransport(url, {
+            requestInit: {
+              headers,
+              signal: abortController.signal,
+            },
+            fetch: finalFetch as unknown as FetchLike,
+          });
+
+          transport.onclose = () => {
+            logger.info(`${this.getLogPrefix()} Streamable-http transport closed`);
+            this.emit('connectionChange', 'disconnected');
+          };
+
+          transport.onmessage = (message: JSONRPCMessage) => {
+            logger.info(`${this.getLogPrefix()} Message received: ${JSON.stringify(message)}`);
+          };
+
+          this.setupTransportErrorHandlers(transport);
+          return transport;
+        }
+
+        default: {
+          throw new Error(`Unsupported transport type: ${type}`);
+        }
+      }
+    } catch (error) {
+      this.emitError(error, 'Failed to construct transport');
+      throw error;
+    }
+  }
+
+  private setupEventListeners(): void {
+    this.isInitializing = true;
+    this.on('connectionChange', (state: t.ConnectionState) => {
+      this.connectionState = state;
+      if (state === 'connected') {
+        this.isReconnecting = false;
+        this.isInitializing = false;
+        this.shouldStopReconnecting = false;
+        this.reconnectAttempts = 0;
+        /**
+         * // FOR DEBUGGING
+         * // this.client.setRequestHandler(PingRequestSchema, async (request, extra) => {
+         * //    logger.info(`[MCP][${this.serverName}] PingRequest: ${JSON.stringify(request)}`);
+         * //    if (getEventListeners && extra.signal) {
+         * //      const listenerCount = getEventListeners(extra.signal, 'abort').length;
+         * //      logger.debug(`Signal has ${listenerCount} abort listeners`);
+         * //    }
+         * //    return {};
+         * //  });
+         */
+      } else if (state === 'error' && !this.isReconnecting && !this.isInitializing) {
+        this.handleReconnection().catch((error) => {
+          logger.error(`${this.getLogPrefix()} Reconnection handler failed:`, error);
+        });
+      }
+    });
+
+    this.subscribeToResources();
+  }
+
+  private async handleReconnection(): Promise<void> {
+    if (
+      this.isReconnecting ||
+      this.shouldStopReconnecting ||
+      this.isInitializing ||
+      this.oauthRequired
+    ) {
+      if (this.oauthRequired) {
+        logger.info(`${this.getLogPrefix()} OAuth required, skipping reconnection attempts`);
+      }
+      return;
+    }
+
+    this.isReconnecting = true;
+    const backoffDelay = (attempt: number) => {
+      const base = Math.min(1000 * Math.pow(2, attempt), 30000);
+      const jitter = Math.floor(Math.random() * 1000); // up to 1s of random jitter
+      return base + jitter;
+    };
+
+    try {
+      while (
+        this.reconnectAttempts < this.MAX_RECONNECT_ATTEMPTS &&
+        !(this.shouldStopReconnecting as boolean)
+      ) {
+        this.reconnectAttempts++;
+        const delay = backoffDelay(this.reconnectAttempts);
+
+        logger.info(
+          `${this.getLogPrefix()} Reconnecting ${this.reconnectAttempts}/${this.MAX_RECONNECT_ATTEMPTS} (delay: ${delay}ms)`,
+        );
+
+        await new Promise((resolve) => setTimeout(resolve, delay));
+
+        try {
+          await this.connect();
+          this.reconnectAttempts = 0;
+          return;
+        } catch (error) {
+          logger.error(`${this.getLogPrefix()} Reconnection attempt failed:`, error);
+
+          // Stop immediately if rate limited - retrying will only make it worse
+          if (this.isRateLimitError(error)) {
+            /**
+             * Rate limiting sets shouldStopReconnecting to prevent hammering the server.
+             * Silent return here (vs throw in connectClient) because we're already in
+             * error recovery mode - throwing would just add noise. The connection
+             * must be recreated to retry after rate limit lifts.
+             */
+            logger.warn(
+              `${this.getLogPrefix()} Rate limited (429), stopping reconnection attempts`,
+            );
+            logger.debug(
+              `${this.getLogPrefix()} Rate limit block is permanent for this connection instance`,
+            );
+            this.shouldStopReconnecting = true;
+            return;
+          }
+
+          if (
+            this.reconnectAttempts === this.MAX_RECONNECT_ATTEMPTS ||
+            (this.shouldStopReconnecting as boolean)
+          ) {
+            logger.error(`${this.getLogPrefix()} Stopping reconnection attempts`);
+            return;
+          }
+        }
+      }
+    } finally {
+      this.isReconnecting = false;
+    }
+  }
+
+  private subscribeToResources(): void {
+    this.client.setNotificationHandler(ResourceListChangedNotificationSchema, async () => {
+      this.emit('resourcesChanged');
+    });
+  }
+
+  async connectClient(): Promise<void> {
+    if (this.connectionState === 'connected') {
+      return;
+    }
+
+    if (this.connectPromise) {
+      return this.connectPromise;
+    }
+
+    if (this.shouldStopReconnecting) {
+      return;
+    }
+
+    this.emit('connectionChange', 'connecting');
+
+    this.connectPromise = (async () => {
+      try {
+        if (this.transport) {
+          try {
+            await this.client.close();
+          } catch (error) {
+            logger.warn(`${this.getLogPrefix()} Error closing connection:`, error);
+          }
+          this.transport = null;
+          await this.closeAgents();
+        }
+
+        this.transport = await this.constructTransport(this.options);
+        this.setupTransportDebugHandlers();
+
+        const connectTimeout = this.options.initTimeout ?? 120000;
+        await withTimeout(
+          this.client.connect(this.transport),
+          connectTimeout,
+          `Connection timeout after ${connectTimeout}ms`,
+        );
+
+        this.connectionState = 'connected';
+        this.emit('connectionChange', 'connected');
+        this.reconnectAttempts = 0;
+      } catch (error) {
+        // Check if it's a rate limit error - stop immediately to avoid making it worse
+        if (this.isRateLimitError(error)) {
+          /**
+           * Rate limiting sets shouldStopReconnecting to prevent hammering the server.
+           * This is a permanent block for this connection instance - the connection
+           * must be recreated (e.g., by user re-initiating) to retry after rate limit lifts.
+           *
+           * We throw here (unlike handleReconnection which returns silently) because:
+           * - connectClient() is a public API - callers expect async errors to throw
+           * - Other errors in this catch block also throw for consistency
+           * - handleReconnection is private/internal error recovery, different context
+           */
+          logger.warn(`${this.getLogPrefix()} Rate limited (429), stopping connection attempts`);
+          this.shouldStopReconnecting = true;
+          this.connectionState = 'error';
+          this.emit('connectionChange', 'error');
+          throw error;
+        }
+
+        // Check if it's an OAuth authentication error
+        if (this.isOAuthError(error)) {
+          logger.warn(`${this.getLogPrefix()} OAuth authentication required`);
+          this.oauthRequired = true;
+          const serverUrl = this.url;
+          logger.debug(
+            `${this.getLogPrefix()} Server URL for OAuth: ${serverUrl ? sanitizeUrlForLogging(serverUrl) : 'undefined'}`,
+          );
+
+          const oauthTimeout = this.options.initTimeout ?? 60000 * 2;
+          /** Promise that will resolve when OAuth is handled */
+          const oauthHandledPromise = new Promise<void>((resolve, reject) => {
+            let timeoutId: NodeJS.Timeout | null = null;
+            let oauthHandledListener: (() => void) | null = null;
+            let oauthFailedListener: ((error: Error) => void) | null = null;
+
+            /** Cleanup function to remove listeners and clear timeout */
+            const cleanup = () => {
+              if (timeoutId) {
+                clearTimeout(timeoutId);
+              }
+              if (oauthHandledListener) {
+                this.off('oauthHandled', oauthHandledListener);
+              }
+              if (oauthFailedListener) {
+                this.off('oauthFailed', oauthFailedListener);
+              }
+            };
+
+            // Success handler
+            oauthHandledListener = () => {
+              cleanup();
+              resolve();
+            };
+
+            // Failure handler
+            oauthFailedListener = (error: Error) => {
+              cleanup();
+              reject(error);
+            };
+
+            // Timeout handler
+            timeoutId = setTimeout(() => {
+              cleanup();
+              reject(new Error(`OAuth handling timeout after ${oauthTimeout}ms`));
+            }, oauthTimeout);
+
+            // Listen for both success and failure events
+            this.once('oauthHandled', oauthHandledListener);
+            this.once('oauthFailed', oauthFailedListener);
+          });
+
+          // Emit the event
+          this.emit('oauthRequired', {
+            serverName: this.serverName,
+            error,
+            serverUrl,
+            userId: this.userId,
+          });
+
+          try {
+            // Wait for OAuth to be handled
+            await oauthHandledPromise;
+            // Reset the oauthRequired flag
+            this.oauthRequired = false;
+            // Don't throw the error - just return so connection can be retried
+            logger.info(
+              `${this.getLogPrefix()} OAuth handled successfully, connection will be retried`,
+            );
+            return;
+          } catch (oauthError) {
+            // OAuth failed or timed out
+            this.oauthRequired = false;
+            logger.error(`${this.getLogPrefix()} OAuth handling failed:`, oauthError);
+            // Re-throw the original authentication error
+            throw error;
+          }
+        }
+
+        this.connectionState = 'error';
+        this.emit('connectionChange', 'error');
+        throw error;
+      } finally {
+        this.connectPromise = null;
+      }
+    })();
+
+    return this.connectPromise;
+  }
+
+  private setupTransportDebugHandlers(): void {
+    if (!this.transport) {
+      return;
+    }
+
+    this.transport.onmessage = (msg) => {
+      logger.debug(`${this.getLogPrefix()} Transport received: ${JSON.stringify(msg)}`);
+    };
+
+    const originalSend = this.transport.send.bind(this.transport);
+    this.transport.send = async (msg) => {
+      if ('result' in msg && !('method' in msg) && Object.keys(msg.result ?? {}).length === 0) {
+        if (Date.now() - this.lastPingTime < FIVE_MINUTES) {
+          throw new Error('Empty result');
+        }
+        this.lastPingTime = Date.now();
+      }
+      logger.debug(`${this.getLogPrefix()} Transport sending: ${JSON.stringify(msg)}`);
+      return originalSend(msg);
+    };
+  }
+
+  async connect(): Promise<void> {
+    try {
+      await this.disconnect();
+      await this.connectClient();
+      if (!(await this.isConnected())) {
+        throw new Error('Connection not established');
+      }
+    } catch (error) {
+      logger.error(`${this.getLogPrefix()} Connection failed:`, error);
+      throw error;
+    }
+  }
+
+  private setupTransportErrorHandlers(transport: Transport): void {
+    transport.onerror = (error) => {
+      const rawMessage =
+        error && typeof error === 'object' ? ((error as { message?: string }).message ?? '') : '';
+
+      /**
+       * The MCP SDK's StreamableHTTPClientTransport fires onerror for SSE GET stream
+       * disconnects but also handles reconnection internally via _scheduleReconnection.
+       * Escalating these to a full transport rebuild creates a redundant reconnection
+       * loop. Log at debug level and let the SDK recover the GET stream on its own.
+       *
+       * "Maximum reconnection attempts … exceeded" means the SDK gave up — that one
+       * must fall through so our higher-level reconnection takes over.
+       */
+      if (
+        rawMessage.startsWith(SDK_SSE_STREAM_DISCONNECTED) ||
+        rawMessage.startsWith(SDK_SSE_RECONNECT_FAILED)
+      ) {
+        logger.debug(`${this.getLogPrefix()} SDK SSE stream recovery in progress: ${rawMessage}`);
+        return;
+      }
+
+      const {
+        message: errorMessage,
+        code: errorCode,
+        isProxyHint,
+        isTransient,
+      } = extractSSEErrorMessage(error);
+
+      if (errorCode === 404) {
+        const hasSession =
+          'sessionId' in transport &&
+          (transport as { sessionId?: string }).sessionId != null &&
+          (transport as { sessionId?: string }).sessionId !== '';
+
+        if (!hasSession && errorMessage.toLowerCase().includes('failed to open sse stream')) {
+          logger.warn(
+            `${this.getLogPrefix()} SSE stream not available (404), no session. Ignoring.`,
+          );
+          return;
+        }
+
+        if (hasSession) {
+          logger.warn(
+            `${this.getLogPrefix()} 404 with active session — session lost, triggering reconnection.`,
+          );
+        }
+      }
+
+      // Check if it's an OAuth authentication error
+      if (this.isOAuthError(error)) {
+        logger.warn(`${this.getLogPrefix()} OAuth authentication error detected`);
+        this.emit('oauthError', error);
+      }
+
+      /**
+       * Log with enhanced context for debugging.
+       * All transport.onerror events are logged as errors to preserve stack traces.
+       * isTransient indicates whether auto-reconnection is expected to succeed.
+       *
+       * The MCP SDK's SseError extends Error and includes:
+       * - code: HTTP status code or eventsource error code
+       * - event: The original eventsource ErrorEvent
+       * - stack: Full stack trace
+       */
+      const errorContext: Record<string, unknown> = {
+        code: errorCode,
+        isTransient,
+      };
+
+      if (isProxyHint) {
+        errorContext.hint = 'Check Nginx/proxy configuration for SSE endpoints';
+      }
+
+      // Extract additional debug info from SseError if available
+      if (error && typeof error === 'object') {
+        const sseError = error as { event?: unknown; stack?: string };
+
+        // Include the original eventsource event for debugging
+        if (sseError.event && typeof sseError.event === 'object') {
+          const event = sseError.event as { code?: number; message?: string; type?: string };
+          errorContext.eventDetails = {
+            type: event.type,
+            code: event.code,
+            message: event.message,
+          };
+        }
+
+        // Include stack trace if available
+        if (sseError.stack) {
+          errorContext.stack = sseError.stack;
+        }
+      }
+
+      const errorLabel = isTransient
+        ? 'Transport error (transient, will reconnect)'
+        : 'Transport error (may require manual intervention)';
+
+      logger.error(`${this.getLogPrefix()} ${errorLabel}: ${errorMessage}`, errorContext);
+
+      this.emit('connectionChange', 'error');
+    };
+  }
+
+  private async closeAgents(): Promise<void> {
+    const logPrefix = this.getLogPrefix();
+    const closing = this.agents.map((agent) =>
+      agent.close().catch((err: unknown) => {
+        logger.debug(`${logPrefix} Agent close error (non-fatal):`, err);
+      }),
+    );
+    this.agents = [];
+    await Promise.all(closing);
+  }
+
+  public async disconnect(): Promise<void> {
+    try {
+      if (this.transport) {
+        await this.client.close();
+        this.transport = null;
+      }
+      await this.closeAgents();
+      if (this.connectionState === 'disconnected') {
+        return;
+      }
+      this.connectionState = 'disconnected';
+      this.emit('connectionChange', 'disconnected');
+    } finally {
+      this.connectPromise = null;
+    }
+  }
+
+  async fetchResources(): Promise<t.MCPResource[]> {
+    try {
+      const { resources } = await this.client.listResources();
+      return resources;
+    } catch (error) {
+      this.emitError(error, 'Failed to fetch resources');
+      return [];
+    }
+  }
+
+  async fetchTools() {
+    try {
+      const { tools } = await this.client.listTools();
+      return tools;
+    } catch (error) {
+      this.emitError(error, 'Failed to fetch tools');
+      return [];
+    }
+  }
+
+  async fetchPrompts(): Promise<t.MCPPrompt[]> {
+    try {
+      const { prompts } = await this.client.listPrompts();
+      return prompts;
+    } catch (error) {
+      this.emitError(error, 'Failed to fetch prompts');
+      return [];
+    }
+  }
+
+  public async isConnected(): Promise<boolean> {
+    // First check if we're in a connected state
+    if (this.connectionState !== 'connected') {
+      return false;
+    }
+
+    // If we recently checked, skip expensive verification
+    const now = Date.now();
+    if (now - this.lastConnectionCheckAt < mcpConfig.CONNECTION_CHECK_TTL) {
+      return true;
+    }
+    this.lastConnectionCheckAt = now;
+
+    try {
+      // Try ping first as it's the lightest check
+      await this.client.ping();
+      return this.connectionState === 'connected';
+    } catch (error) {
+      // Check if the error is because ping is not supported (method not found)
+      const pingUnsupported =
+        error instanceof Error &&
+        ((error as Error)?.message.includes('-32601') ||
+          (error as Error)?.message.includes('-32602') ||
+          (error as Error)?.message.includes('invalid method ping') ||
+          (error as Error)?.message.includes('Unsupported method: ping') ||
+          (error as Error)?.message.includes('method not found'));
+
+      if (!pingUnsupported) {
+        logger.error(`${this.getLogPrefix()} Ping failed:`, error);
+        return false;
+      }
+
+      // Ping is not supported by this server, try an alternative verification
+      logger.debug(
+        `${this.getLogPrefix()} Server does not support ping method, verifying connection with capabilities`,
+      );
+
+      try {
+        // Get server capabilities to verify connection is truly active
+        const capabilities = this.client.getServerCapabilities();
+
+        // If we have capabilities, try calling a supported method to verify connection
+        if (capabilities?.tools) {
+          await this.client.listTools();
+          return this.connectionState === 'connected';
+        } else if (capabilities?.resources) {
+          await this.client.listResources();
+          return this.connectionState === 'connected';
+        } else if (capabilities?.prompts) {
+          await this.client.listPrompts();
+          return this.connectionState === 'connected';
+        } else {
+          // No capabilities to test, but we're in connected state and initialization succeeded
+          logger.debug(
+            `${this.getLogPrefix()} No capabilities to test, assuming connected based on state`,
+          );
+          return this.connectionState === 'connected';
+        }
+      } catch (capabilityError) {
+        // If capability check fails, the connection is likely broken
+        logger.error(`${this.getLogPrefix()} Connection verification failed:`, capabilityError);
+        return false;
+      }
+    }
+  }
+
+  public setOAuthTokens(tokens: MCPOAuthTokens): void {
+    this.oauthTokens = tokens;
+  }
+
+  /**
+   * Check if this connection is stale compared to config update time.
+   * A connection is stale if it was created before the config was updated.
+   *
+   * @param configUpdatedAt - Unix timestamp (ms) when config was last updated
+   * @returns true if connection was created before config update, false otherwise
+   */
+  public isStale(configUpdatedAt: number): boolean {
+    return this.createdAt < configUpdatedAt;
+  }
+
+  private isOAuthError(error: unknown): boolean {
+    if (!error || typeof error !== 'object') {
+      return false;
+    }
+
+    // Check for error code
+    if ('code' in error) {
+      const code = (error as { code?: number }).code;
+      if (code === 401 || code === 403) {
+        return true;
+      }
+    }
+
+    // Check message for various auth error indicators
+    if ('message' in error && typeof error.message === 'string') {
+      const message = error.message.toLowerCase();
+      // Check for 401 status
+      if (message.includes('401') || message.includes('non-200 status code (401)')) {
+        return true;
+      }
+      // Check for invalid_token (OAuth servers return this for expired/revoked tokens)
+      if (message.includes('invalid_token')) {
+        return true;
+      }
+      // Check for invalid_grant (OAuth servers return this for expired/revoked grants)
+      if (message.includes('invalid_grant')) {
+        return true;
+      }
+      // Check for authentication required
+      if (message.includes('authentication required') || message.includes('unauthorized')) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Checks if an error indicates rate limiting (HTTP 429).
+   * Rate limited requests should stop reconnection attempts to avoid making the situation worse.
+   */
+  private isRateLimitError(error: unknown): boolean {
+    if (!error || typeof error !== 'object') {
+      return false;
+    }
+
+    // Check for error code
+    if ('code' in error) {
+      const code = (error as { code?: number }).code;
+      if (code === 429) {
+        return true;
+      }
+    }
+
+    // Check message for rate limit indicators
+    if ('message' in error && typeof error.message === 'string') {
+      const message = error.message.toLowerCase();
+      if (
+        message.includes('429') ||
+        message.includes('rate limit') ||
+        message.includes('too many requests')
+      ) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  /** Checks if an error indicates a timeout or aborted operation */
+  private isTimeoutError(error: unknown): boolean {
+    if (!error || typeof error !== 'object') {
+      return false;
+    }
+    const err = error as { code?: number; message?: string };
+    if (err.code === -32001) {
+      return true;
+    }
+    if (typeof err.message === 'string') {
+      const message = err.message.toLowerCase();
+      return (
+        message.includes('timeout') || message.includes('timed out') || message.includes('aborted')
+      );
+    }
+    return false;
+  }
+}
