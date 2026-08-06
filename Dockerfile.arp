@@ -1,0 +1,121 @@
+# Dockerfile.arp
+# Multi-stage build for the OpenInsight ARP runtime image.
+# Final stage contains only built artifacts + production deps (no source code).
+# Base image: node:24-alpine
+
+ARG NODE_MAX_OLD_SPACE_SIZE=6144
+
+# ============================================================
+# Base: node 24 alpine + system deps, package.json files
+# ============================================================
+FROM node:24-alpine AS base-min
+RUN apk add --no-cache jemalloc curl
+ENV LD_PRELOAD=/usr/lib/libjemalloc.so.2
+WORKDIR /app
+RUN npm config set fetch-retry-maxtimeout 600000 && \
+    npm config set fetch-retries 5 && \
+    npm config set fetch-retry-mintimeout 15000
+COPY package*.json ./
+COPY packages/data-provider/package*.json ./packages/data-provider/
+COPY packages/api/package*.json ./packages/api/
+COPY packages/data-schemas/package*.json ./packages/data-schemas/
+COPY packages/client/package*.json ./packages/client/
+COPY client/package*.json ./client/
+COPY api/package*.json ./api/
+
+# ============================================================
+# deps: full install for building TypeScript packages & client
+# ============================================================
+FROM base-min AS deps
+RUN npm ci
+
+# ============================================================
+# Build data-provider package
+# ============================================================
+FROM deps AS data-provider-build
+WORKDIR /app/packages/data-provider
+COPY packages/data-provider ./
+RUN npm run build
+
+# ============================================================
+# Build data-schemas package
+# ============================================================
+FROM deps AS data-schemas-build
+WORKDIR /app/packages/data-schemas
+COPY packages/data-schemas ./
+COPY --from=data-provider-build /app/packages/data-provider/dist /app/packages/data-provider/dist
+RUN npm run build
+
+# ============================================================
+# Build api (TS) package
+# ============================================================
+FROM deps AS api-package-build
+WORKDIR /app/packages/api
+COPY packages/api ./
+COPY --from=data-provider-build /app/packages/data-provider/dist /app/packages/data-provider/dist
+COPY --from=data-schemas-build /app/packages/data-schemas/dist /app/packages/data-schemas/dist
+RUN npm run build
+
+# ============================================================
+# Build client (shared) package
+# ============================================================
+FROM deps AS client-package-build
+WORKDIR /app/packages/client
+COPY packages/client ./
+RUN npm run build
+
+# ============================================================
+# Build frontend client
+# ============================================================
+FROM deps AS client-build
+WORKDIR /app/client
+COPY client ./
+COPY --from=data-provider-build /app/packages/data-provider/dist /app/packages/data-provider/dist
+COPY --from=client-package-build /app/packages/client/dist /app/packages/client/dist
+COPY --from=client-package-build /app/packages/client/src /app/packages/client/src
+ARG NODE_MAX_OLD_SPACE_SIZE
+ENV NODE_OPTIONS="--max-old-space-size=${NODE_MAX_OLD_SPACE_SIZE}"
+RUN npm run build
+
+# ============================================================
+# Final runtime image — no source code
+# ============================================================
+FROM node:24-alpine AS runtime
+RUN apk add --no-cache jemalloc python3 py3-pip
+ENV LD_PRELOAD=/usr/lib/libjemalloc.so.2
+# `uv` / `uvx` for extended MCP support (COPY auto-selects correct arch via buildx)
+COPY --from=ghcr.io/astral-sh/uv:0.9.5-python3.12-alpine /usr/local/bin/uv /usr/local/bin/uvx /bin/
+
+WORKDIR /app
+
+# package.json files so npm workspaces resolve, then production deps only
+COPY package*.json ./
+COPY packages/data-provider/package*.json ./packages/data-provider/
+COPY packages/api/package*.json ./packages/api/
+COPY packages/data-schemas/package*.json ./packages/data-schemas/
+COPY packages/client/package*.json ./packages/client/
+COPY client/package*.json ./client/
+COPY api/package*.json ./api/
+RUN npm ci --omit=dev --no-audit && \
+    npm cache clean --force
+
+# Empty .env placeholder (runtime config comes from env_file / env vars)
+RUN touch .env && \
+    mkdir -p /app/client/public/images /app/client/dist /app/logs /app/uploads /app/data
+
+# Bake @librechat/agents overrides into node_modules (matches `npm run override:agents`)
+COPY overrides/agents/src/tools/CodeExecutor.cjs ./node_modules/@librechat/agents/dist/cjs/tools/CodeExecutor.cjs
+COPY overrides/agents/dist/cjs/llm/openai/index.cjs ./node_modules/@librechat/agents/dist/cjs/llm/openai/index.cjs
+
+# Built artifacts only — no TS sources
+COPY api ./api
+COPY config ./config
+COPY --from=data-provider-build /app/packages/data-provider/dist ./packages/data-provider/dist
+COPY --from=data-schemas-build /app/packages/data-schemas/dist ./packages/data-schemas/dist
+COPY --from=api-package-build /app/packages/api/dist ./packages/api/dist
+COPY --from=client-build /app/client/dist ./client/dist
+
+ENV NODE_ENV=production
+ENV HOST=0.0.0.0
+EXPOSE 3080
+CMD ["node", "api/server/index.js"]
