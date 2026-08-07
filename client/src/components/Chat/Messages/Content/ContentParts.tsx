@@ -105,6 +105,35 @@ const ContentParts = memo(function ContentParts({
     ],
   );
 
+  // NOTE: this useMemo MUST be declared before any early returns so the hook
+  // order stays stable across renders (Rules of Hooks). When editing, skip the
+  // grouping work via the `edit` guard.
+  const groupedRender = useMemo(() => {
+    if (toolCallVisible || edit === true) {
+      return null;
+    }
+
+    const thinkingParts: TMessageContentParts[] = [];
+    const textParts: PartWithIndex[] = [];
+
+    content?.forEach((part, idx) => {
+      if (!part) {
+        return;
+      }
+      if (part.type === ContentTypes.THINK || part.type === ContentTypes.TOOL_CALL) {
+        thinkingParts.push(part);
+      } else {
+        textParts.push({ part, idx });
+      }
+    });
+
+    if (thinkingParts.length === 0) {
+      return null;
+    }
+
+    return { thinkingParts, textParts };
+  }, [content, toolCallVisible, edit]);
+
   // Early return: no content
   if (!content) {
     return null;
@@ -168,36 +197,6 @@ const ContentParts = memo(function ContentParts({
       />
     );
   }
-
-  // Sequential content: render parts in order (90% of cases)
-  // When toolCallVisible is false, ALL THINK + TOOL_CALL parts go into ONE
-  // ThinkingProcess block at the top, ALL TEXT parts render as body content below.
-  // This matches the customer experience: thinking is collapsed, output is clean.
-  const groupedRender = useMemo(() => {
-    if (toolCallVisible) {
-      return null;
-    }
-
-    const thinkingParts: TMessageContentParts[] = [];
-    const textParts: PartWithIndex[] = [];
-
-    content.forEach((part, idx) => {
-      if (!part) {
-        return;
-      }
-      if (part.type === ContentTypes.THINK || part.type === ContentTypes.TOOL_CALL) {
-        thinkingParts.push(part);
-      } else {
-        textParts.push({ part, idx });
-      }
-    });
-
-    if (thinkingParts.length === 0) {
-      return null;
-    }
-
-    return { thinkingParts, textParts };
-  }, [content, toolCallVisible]);
 
   // If toolCallVisible is false and there are thinking parts, use grouped rendering
   if (groupedRender) {
