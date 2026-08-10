@@ -10,6 +10,7 @@ export * from './generators';
 export * from './graph';
 export * from './path';
 export * from './key';
+export * from './lang';
 export * from './latex';
 export * from './llm';
 export * from './math';

@@ -1,6 +1,6 @@
 const mongoose = require('mongoose');
 const { encodeEphemeralAgentId, PermissionTypes, Permissions } = require('librechat-data-provider');
-const { getCustomEndpointConfig, getPiSystemPrompt, checkAccess } = require('@librechat/api');
+const { getCustomEndpointConfig, getPiSystemPrompt, checkAccess, getLangFromReq } = require('@librechat/api');
 const { getAppConfig } = require('~/server/services/Config');
 const { MemoryEntry } = require('~/db/models');
 const { GalleryArtifact } = require('~/models/GalleryArtifact');
@@ -616,7 +616,7 @@ async function handleSolidificationRequest({ userMessage, userId, conversationId
   return true;
 }
 
-async function runNonStreamingPI({ finalUserMessage, agentId, sessionId, userId, res, streamStartTime }) {
+async function runNonStreamingPI({ finalUserMessage, agentId, sessionId, userId, res, streamStartTime, lang }) {
   try {
     const response = await fetch(`${PI_HOST}/prompt`, {
       method: 'POST',
@@ -631,7 +631,7 @@ async function runNonStreamingPI({ finalUserMessage, agentId, sessionId, userId,
         sessionId,
         cwd: null,
         stream: true,
-        systemPrompt: await getPiSystemPrompt(),
+        systemPrompt: await getPiSystemPrompt(lang),
       }),
     });
 
@@ -685,7 +685,7 @@ async function runNonStreamingPI({ finalUserMessage, agentId, sessionId, userId,
   }
 }
 
-async function streamFromPI({ res, chatId, created, finalUserMessage, agentId, sessionId, userId, streamStartTime }) {
+async function streamFromPI({ res, chatId, created, finalUserMessage, agentId, sessionId, userId, streamStartTime, lang }) {
   setSseHeaders(res);
   writeSseChunk(res, buildChunk(chatId, created, { role: 'assistant', content: '' }));
 
@@ -723,7 +723,7 @@ async function streamFromPI({ res, chatId, created, finalUserMessage, agentId, s
         sessionId,
         cwd: null,
         stream: true,
-        systemPrompt: await getPiSystemPrompt(),
+        systemPrompt: await getPiSystemPrompt(lang),
       }),
       signal: abortController.signal,
     });
@@ -901,6 +901,7 @@ const piChatCompletionsController = async (req, res) => {
   });
 
   const streamStartTime = Date.now();
+  const lang = getLangFromReq(req);
 
   if (!stream) {
     return runNonStreamingPI({
@@ -910,6 +911,7 @@ const piChatCompletionsController = async (req, res) => {
       userId,
       res,
       streamStartTime,
+      lang,
     });
   }
 
@@ -925,6 +927,7 @@ const piChatCompletionsController = async (req, res) => {
     sessionId,
     userId,
     streamStartTime,
+    lang,
   });
 };
 

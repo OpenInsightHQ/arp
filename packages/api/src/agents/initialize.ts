@@ -27,6 +27,7 @@ import {
   extractLibreChatParams,
   getModelMaxTokens,
   getThreadData,
+  replaceLangVar,
 } from '~/utils';
 import { filterFilesByEndpointConfig } from '~/files';
 import { appendUniquePrompt, buildVisualizationPrompt, generateArtifactsPrompt } from '~/prompts';
@@ -455,6 +456,11 @@ export async function initializeAgent(
     } else {
       agent.instructions = agent.instructions.replace(/{{updated_examples}}/gi, '');
     }
+  }
+
+  // 替换 {{lang}}
+  if (agent.instructions && /{{lang}}/i.test(agent.instructions)) {
+    agent.instructions = replaceLangVar(agent.instructions, req);
   }
 
   const endpointVisualizationOptions = (endpointOption ?? {}) as {

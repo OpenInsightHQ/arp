@@ -1923,6 +1923,7 @@ export const specialVariables = {
   current_datetime: true,
   keyword_definition: true,
   updated_examples: true,
+  lang: true,
 };
 
 export type TSpecialVarLabel = `com_ui_special_var_${keyof typeof specialVariables}`;
