@@ -154,3 +154,54 @@ Multi-line imports count total character length across all lines. Consolidate va
 ## Formatting
 
 Fix all formatting lint errors (trailing spaces, tabs, newlines, indentation) using auto-fix when available. All TypeScript/ESLint warnings and errors **must** be resolved.
+
+---
+
+## PI Agent Architecture (One Pi)
+
+PI ("One Pi") is a custom endpoint defined in `librechat.yaml` with `baseURL: ${ARP_HOST}/api/pi`. The PI backend exposes two interfaces:
+
+1. **OpenAI-compatible** — `${ARP_HOST}/api/pi/chat/completions` (custom endpoint, OpenAI format)
+2. **PI-native** — `${PI_HOST}/prompt` (SSE stream, accepts `{message, agentId, sessionId, systemPrompt, ...}`)
+
+### Two Request Paths
+
+| Path | Route | Controller | System Prompt Source |
+|---|---|---|---|
+| **Frontend UI chat** | `/api/agents/chat/pi` → custom endpoint `baseURL` | `piChatCompletionsController` (OpenAI-compat) | PI backend injects its own; LibreChat passes `additional_instructions` |
+| **Direct PI routes** | `/api/pi/prompt`, `/api/pi/chat/completions` | `piChatCompletionsController` or SSE forward | `getPiSystemPrompt(lang)` from DB, passed as `systemPrompt` field |
+
+### Frontend Chat Flow (`/api/agents/chat/pi`)
+
+```
+Browser → /api/agents/chat/pi → initializeAgent (packages/api/src/agents/initialize.ts)
+  → custom endpoint forwards to ${ARP_HOST}/api/pi/chat/completions
+  → piChatCompletionsController (api/server/controllers/pi/chatCompletions.js)
+  → fetch ${PI_HOST}/prompt with { systemPrompt: getPiSystemPrompt(lang) }
+```
+
+- PI agent record has **empty instructions** (`provider` shows as `openAI` due to custom endpoint override).
+- `buildPiForwardHeaders` (`packages/api/src/endpoints/custom/piRequestHeaders.ts`) adds `X-Conversation-Id`, `X-PI-Context-Handoff`, `X-PI-Max-Context-Tokens`, and `Accept-Language` headers to the forwarded request.
+- `getPiSystemPrompt(lang)` (`packages/api/src/prompts/systemPromptService.ts`) reads `pi.system` from the `systemprompts` collection and appends `<available_prompts>`.
+- System prompt seeding is handled by the DMP project (`init-data/system-prompts/*.yaml`), not by LibreChat.
+
+### Key Files
+
+| File | Purpose |
+|---|---|
+| `packages/api/src/agents/initialize.ts` | Agent initialization; PI `additional_instructions` injection |
+| `packages/api/src/prompts/systemPromptService.ts` | `getPiSystemPrompt(lang)` — fetches `pi.system` from DB |
+| `packages/api/src/endpoints/custom/piRequestHeaders.ts` | `buildPiForwardHeaders` — headers forwarded to PI backend |
+| `packages/api/src/endpoints/custom/initialize.ts` | Custom endpoint init; calls `buildPiForwardHeaders` |
+| `api/server/controllers/pi/chatCompletions.js` | PI OpenAI-compatible controller (stateless translation layer) |
+| `api/server/routes/pi.js` | PI routes (`/prompt`, `/chat/completions`, files) |
+
+### Build Reminder
+
+`/api` (JS backend) loads `@librechat/api` from compiled `dist/`. After changing TypeScript in `packages/api/`, rebuild before testing:
+
+```bash
+cd packages/api && npm run build
+```
+
+`nodemon` ignores `packages/` — it will NOT auto-restart on `packages/api` changes. Manual backend restart is required.

@@ -28,6 +28,8 @@ import {
   getModelMaxTokens,
   getThreadData,
   replaceLangVar,
+  getLangFromReq,
+  getLangText,
 } from '~/utils';
 import { filterFilesByEndpointConfig } from '~/files';
 import { appendUniquePrompt, buildVisualizationPrompt, generateArtifactsPrompt } from '~/prompts';
@@ -481,6 +483,16 @@ export async function initializeAgent(
     agent.additional_instructions,
     visualizationPrompt,
   );
+
+  // PI endpoint: inject language instruction since PI backend's system prompt
+  // contains {{lang}} but the PI backend cannot resolve it from the OpenAI-compatible request.
+  // Append the resolved language directive so PI receives it via additional_instructions.
+  if (String(endpointOption?.endpoint) === 'pi') {
+    agent.additional_instructions = appendUniquePrompt(
+      agent.additional_instructions,
+      getLangText(getLangFromReq(req)),
+    );
+  }
 
   const agentMaxContextNum = Number(agentMaxContextTokens) || 34000;
   const maxOutputTokensNum = Number(maxOutputTokens) || 0;

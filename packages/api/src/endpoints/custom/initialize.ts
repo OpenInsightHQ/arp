@@ -12,7 +12,7 @@ import { getOpenAIConfig } from '~/endpoints/openai/config';
 import { buildPiForwardHeaders } from './piRequestHeaders';
 import { getCustomEndpointConfig } from '~/app/config';
 import { fetchModels } from '~/endpoints/models';
-import { isUserProvided, checkUserKeyExpiry } from '~/utils';
+import { isUserProvided, checkUserKeyExpiry, getLangFromReq } from '~/utils';
 import { standardCache } from '~/cache';
 
 const { PROXY } = process.env;
@@ -170,6 +170,7 @@ export async function initializeCustom({
       req.body?.conversationId,
       requestBody?.piContextHandoff,
       endpointConfig.piMaxContextTokens,
+      getLangFromReq(req),
     ),
   };
 
