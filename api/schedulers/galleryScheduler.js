@@ -15,7 +15,7 @@
 require('dotenv').config();
 const mongoose = require('mongoose');
 const { encodeEphemeralAgentId } = require('librechat-data-provider');
-const { getSystemPromptOrSeed, initializeSystemPromptService } = require('@librechat/api');
+const { getPiSystemPrompt, initializeSystemPromptService } = require('@librechat/api');
 const { logger } = require('@librechat/data-schemas');
 
 // 导入模型
@@ -590,7 +590,7 @@ async function executePiSkillTask(task, runId) {
       sessionId,
       cwd: null,
       stream: true,
-      systemPrompt: await getSystemPromptOrSeed('pi.system'),
+      systemPrompt: await getPiSystemPrompt(),
     }),
   });
 

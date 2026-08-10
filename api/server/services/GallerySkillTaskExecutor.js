@@ -1,5 +1,5 @@
 const { encodeEphemeralAgentId } = require('librechat-data-provider');
-const { getSystemPromptOrSeed } = require('@librechat/api');
+const { getPiSystemPrompt } = require('@librechat/api');
 const { logger } = require('@librechat/data-schemas');
 const {
   GallerySkillTaskRun,
@@ -86,7 +86,7 @@ const executePiSkillTask = async (task, runId) => {
       sessionId,
       cwd: null,
       stream: true,
-      systemPrompt: await getSystemPromptOrSeed('pi.system'),
+      systemPrompt: await getPiSystemPrompt(),
     }),
   });
 

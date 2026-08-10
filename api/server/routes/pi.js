@@ -3,7 +3,7 @@ const router = express.Router();
 const multer = require('multer');
 const { requireJwtAuth } = require('../middleware/');
 const { piChatCompletionsController, PI_HOST, PI_API_KEY } = require('~/server/controllers/pi/chatCompletions');
-const { getSystemPromptOrSeed } = require('@librechat/api');
+const { getPiSystemPrompt } = require('@librechat/api');
 const { safeHttpStatus, sanitizeForLog } = require('~/server/utils/sanitize');
 
 const PI_UPLOAD_LIMIT_MB = parseInt(process.env.PI_UPLOAD_LIMIT_MB || '1024', 10);
@@ -227,7 +227,7 @@ router.post('/prompt', requireJwtAuth, async (req, res) => {
         'api-key': PI_API_KEY,
         'X-User-Id': req.user.id,
       },
-      body: JSON.stringify({ message, agentId, sessionId, cwd, stream, systemPrompt: await getSystemPromptOrSeed('pi.system') }),
+      body: JSON.stringify({ message, agentId, sessionId, cwd, stream, systemPrompt: await getPiSystemPrompt() }),
     });
 
     if (!response.ok) {

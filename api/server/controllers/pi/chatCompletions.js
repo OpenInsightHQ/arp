@@ -1,6 +1,6 @@
 const mongoose = require('mongoose');
 const { encodeEphemeralAgentId, PermissionTypes, Permissions } = require('librechat-data-provider');
-const { getCustomEndpointConfig, getSystemPromptOrSeed, checkAccess } = require('@librechat/api');
+const { getCustomEndpointConfig, getPiSystemPrompt, checkAccess } = require('@librechat/api');
 const { getAppConfig } = require('~/server/services/Config');
 const { MemoryEntry } = require('~/db/models');
 const { GalleryArtifact } = require('~/models/GalleryArtifact');
@@ -631,7 +631,7 @@ async function runNonStreamingPI({ finalUserMessage, agentId, sessionId, userId,
         sessionId,
         cwd: null,
         stream: true,
-        systemPrompt: await getSystemPromptOrSeed('pi.system'),
+        systemPrompt: await getPiSystemPrompt(),
       }),
     });
 
@@ -723,7 +723,7 @@ async function streamFromPI({ res, chatId, created, finalUserMessage, agentId, s
         sessionId,
         cwd: null,
         stream: true,
-        systemPrompt: await getSystemPromptOrSeed('pi.system'),
+        systemPrompt: await getPiSystemPrompt(),
       }),
       signal: abortController.signal,
     });

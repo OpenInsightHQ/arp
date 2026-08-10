@@ -118,6 +118,34 @@ export async function getSystemPromptOrSeed(key: string): Promise<string | null>
   return created.content;
 }
 
+export async function getPiSystemPrompt(): Promise<string | null> {
+  const basePrompt = await getSystemPromptOrSeed('pi.system');
+  if (!basePrompt) {
+    return null;
+  }
+
+  const Model = getModel();
+  const piPrompts: ISystemPrompt[] = await Model.find({
+    piPrompt: true,
+    piSavePath: { $ne: '', $exists: true },
+  })
+    .sort({ key: 1 })
+    .lean();
+
+  if (piPrompts.length === 0) {
+    return basePrompt;
+  }
+
+  const promptEntries = piPrompts
+    .map(
+      (p) =>
+        `  <prompt>\n    <name>${p.key}</name>\n    <description>${p.description}</description>\n    <location>${p.piSavePath}</location>\n  </prompt>`,
+    )
+    .join('\n');
+
+  return `${basePrompt}\n\n<available_prompts>\n${promptEntries}\n</available_prompts>`;
+}
+
 export async function getSystemPromptDoc(key: string): Promise<ISystemPrompt | null> {
   const Model = getModel();
   return Model.findOne({ key }).lean();
