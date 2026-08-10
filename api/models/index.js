@@ -16,23 +16,13 @@ const {
 const { getConvoTitle, getConvo, saveConvo, deleteConvos } = require('./Conversation');
 const { getPreset, getPresets, savePreset, deletePresets } = require('./Preset');
 const { File } = require('~/db/models');
-const { initializeSystemPromptService, seedAllSystemPrompts, syncMissingSystemPrompts } = require('@librechat/api');
+const { initializeSystemPromptService } = require('@librechat/api');
 
 const seedDatabase = async () => {
   await methods.initializeRoles();
   await methods.seedDefaultRoles();
   await methods.ensureDefaultCategories();
   initializeSystemPromptService(mongoose);
-  try {
-    await seedAllSystemPrompts();
-  } catch (err) {
-    console.error('[SystemPrompt] seedAllSystemPrompts failed:', err);
-  }
-  try {
-    await syncMissingSystemPrompts();
-  } catch (err) {
-    console.error('[SystemPrompt] syncMissingSystemPrompts failed:', err);
-  }
 };
 
 module.exports = {

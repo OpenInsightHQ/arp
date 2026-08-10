@@ -1,71 +1,23 @@
-import { logger } from '@librechat/data-schemas';
 import { replaceSpecialVars } from 'librechat-data-provider';
 import type { ISystemPrompt } from '@librechat/data-schemas';
-import systemPromptSeeds from './systemPromptSeeds';
+import { getLangText } from '~/utils';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let SystemPromptModel: any = null;
 
 function getModel() {
   if (!SystemPromptModel) {
-    throw new Error('SystemPrompt model not initialized. Call initializeSystemPromptService first.');
+    throw new Error(
+      'SystemPrompt model not initialized. Call initializeSystemPromptService first.',
+    );
   }
   return SystemPromptModel;
 }
 
 export function initializeSystemPromptService(mongoose: typeof import('mongoose')) {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-require-imports
   const { createSystemPromptModel } = require('@librechat/data-schemas') as any;
   SystemPromptModel = createSystemPromptModel(mongoose);
-}
-
-interface PiPromptResponse {
-  success?: boolean;
-  key?: string;
-  path?: string;
-}
-
-async function callPiPromptsApi(
-  piHost: string,
-  piApiKey: string,
-  key: string,
-  content: string,
-): Promise<string | null> {
-  const url = `${piHost}/prompts`;
-  try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'api-key': piApiKey,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ key, content }),
-      signal: AbortSignal.timeout(30000),
-    });
-
-    if (!response.ok) {
-      const body = await response.text().catch(() => '');
-      logger.warn(
-        `[SystemPrompt] PI sync failed, key=${key}, status=${response.status}, body=${body}`,
-      );
-      return null;
-    }
-
-    const respBody: PiPromptResponse = await response.json();
-    if (respBody.success !== true) {
-      logger.warn(`[SystemPrompt] PI sync returned success=false, key=${key}`);
-      return null;
-    }
-
-    const path = respBody.path ?? null;
-    logger.info(`[SystemPrompt] PI prompt synced, key=${key}, path=${path}`);
-    return path;
-  } catch (err) {
-    logger.warn(
-      `[SystemPrompt] PI sync exception for key=${key}: ${err instanceof Error ? err.message : String(err)}`,
-    );
-    return null;
-  }
 }
 
 export async function getSystemPrompt(key: string): Promise<string | null> {
@@ -77,52 +29,26 @@ export async function getSystemPrompt(key: string): Promise<string | null> {
   return null;
 }
 
+/**
+ * Returns the system prompt content for `key` from the database.
+ *
+ * Seeding of built-in system prompts is handled by the dmp project
+ * (`init-data/system-prompts/*.yaml`); this service only reads.
+ */
 export async function getSystemPromptOrSeed(key: string): Promise<string | null> {
-  const Model = getModel();
-  const doc: ISystemPrompt | null = await Model.findOne({ key }).lean();
-  if (doc) {
-    return replaceSpecialVars({ text: doc.content });
-  }
-
-  const seed = systemPromptSeeds.find((s) => s.key === key);
-  if (!seed) {
-    logger.warn(`[SystemPrompt] No seed found for key: ${key}`);
-    return null;
-  }
-
-  const created = await Model.create({
-    key: seed.key,
-    description: seed.description,
-    category: seed.category,
-    content: seed.content,
-    changeNote: 'Initial seed',
-    isSystem: seed.isSystem,
-    piPrompt: seed.piPrompt ?? false,
-    piSavePath: '',
-    defaultContent: seed.content,
-    updatedBy: 'system',
-    versionHistory: [
-      {
-        version: 1,
-        content: seed.content,
-        updatedBy: 'system',
-        changeNote: 'Initial seed',
-        piPrompt: seed.piPrompt ?? false,
-        piSavePath: '',
-        createdAt: new Date(),
-      },
-    ],
-  });
-
-  logger.info(`[SystemPrompt] Seeded system prompt: ${key}`);
-  return created.content;
+  return getSystemPrompt(key);
 }
 
-export async function getPiSystemPrompt(): Promise<string | null> {
-  const basePrompt = await getSystemPromptOrSeed('pi.system');
+export async function getPiSystemPrompt(lang?: string): Promise<string | null> {
+  const basePrompt = await getSystemPrompt('pi.system');
   if (!basePrompt) {
     return null;
   }
+
+  const langText = getLangText(lang);
+  const resolvedBasePrompt = /{{lang}}/i.test(basePrompt)
+    ? basePrompt.replace(/{{lang}}/gi, langText)
+    : basePrompt;
 
   const Model = getModel();
   const piPrompts: ISystemPrompt[] = await Model.find({
@@ -133,7 +59,7 @@ export async function getPiSystemPrompt(): Promise<string | null> {
     .lean();
 
   if (piPrompts.length === 0) {
-    return basePrompt;
+    return resolvedBasePrompt;
   }
 
   const promptEntries = piPrompts
@@ -143,7 +69,7 @@ export async function getPiSystemPrompt(): Promise<string | null> {
     )
     .join('\n');
 
-  return `${basePrompt}\n\n<available_prompts>\n${promptEntries}\n</available_prompts>`;
+  return `${resolvedBasePrompt}\n\n<available_prompts>\n${promptEntries}\n</available_prompts>`;
 }
 
 export async function getSystemPromptDoc(key: string): Promise<ISystemPrompt | null> {
@@ -228,85 +154,4 @@ export async function resetSystemPrompt(key: string): Promise<ISystemPrompt | nu
 
   await doc.save();
   return doc.toObject() as ISystemPrompt;
-}
-
-export async function seedAllSystemPrompts(): Promise<void> {
-  for (const seed of systemPromptSeeds) {
-    await getSystemPromptOrSeed(seed.key);
-  }
-  logger.info('[SystemPrompt] All system prompts seeded');
-}
-
-export async function syncMissingSystemPrompts(): Promise<void> {
-  const Model = getModel();
-  const piHost = process.env.PI_HOST || process.env.PI_AGENT_URL;
-  const piApiKey = process.env.PI_API_KEY;
-  const piAvailable = !!(piHost && piApiKey);
-  const piPending: ISystemPrompt[] = [];
-
-  for (const seed of systemPromptSeeds) {
-    const exists = await Model.exists({ key: seed.key });
-    if (!exists) {
-      await Model.create({
-        key: seed.key,
-        description: seed.description,
-        category: seed.category,
-        content: seed.content,
-        changeNote: 'Initial seed',
-        isSystem: seed.isSystem,
-        piPrompt: seed.piPrompt ?? false,
-        piSavePath: '',
-        defaultContent: seed.content,
-        updatedBy: 'system',
-        versionHistory: [
-          {
-            version: 1,
-            content: seed.content,
-            updatedBy: 'system',
-            changeNote: 'Initial seed',
-            piPrompt: seed.piPrompt ?? false,
-            piSavePath: '',
-            createdAt: new Date(),
-          },
-        ],
-      });
-      logger.info(`[SystemPrompt] Synced missing system prompt: ${seed.key}`);
-    } else {
-      const doc = await Model.findOne({ key: seed.key }).lean();
-      if (doc && doc.defaultContent !== seed.content) {
-        const userCustomized = doc.content !== doc.defaultContent;
-        await Model.updateOne(
-          { key: seed.key },
-          { $set: { defaultContent: seed.content, ...(!userCustomized && { content: seed.content }) } },
-        );
-        logger.info(
-          `[SystemPrompt] Updated defaultContent for: ${seed.key} (seed changed)${
-            userCustomized ? ', kept user-customized content' : ', also synced content'
-          }`,
-        );
-      }
-    }
-
-    if (seed.piPrompt && piAvailable) {
-      const doc: ISystemPrompt | null = await Model.findOne({ key: seed.key }).lean();
-      if (doc && !doc.piSavePath) {
-        piPending.push(doc);
-      }
-    }
-  }
-
-  for (const doc of piPending) {
-    try {
-      const piSavePath = await callPiPromptsApi(piHost!, piApiKey!, doc.key, doc.content);
-      if (piSavePath !== null) {
-        await Model.updateOne({ key: doc.key }, { $set: { piSavePath } });
-      }
-    } catch (err) {
-      logger.warn(
-        `[SystemPrompt] PI sync failed for ${doc.key}: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-  }
-
-  logger.info('[SystemPrompt] Sync complete');
 }
