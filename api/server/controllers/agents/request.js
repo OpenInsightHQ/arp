@@ -68,6 +68,8 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
   } = req.body;
 
   const userId = req.user.id;
+  // PI endpoint: messages are recorded by the PI backend, skip local saves.
+  const isPIEndpoint = String(endpointOption?.endpoint) === 'pi';
 
   const { allowed, pendingRequests, limit } = await checkAndIncrementPendingRequest(userId);
   if (!allowed) {
@@ -125,6 +127,11 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
      */
     job.emitter.on('allSubscribersLeft', async (aggregatedContent) => {
       if (partialResponseSaved || !aggregatedContent || aggregatedContent.length === 0) {
+        return;
+      }
+
+      if (isPIEndpoint) {
+        logger.debug('[ResumableAgentController] Skipping partial response save for PI endpoint');
         return;
       }
 
@@ -304,7 +311,7 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
 
         // Save user message BEFORE sending final event to avoid race condition
         // where client refetch happens before database is updated
-        if (!client.skipSaveUserMessage && userMessage) {
+        if (!isPIEndpoint && !client.skipSaveUserMessage && userMessage) {
           await saveMessage(req, userMessage, {
             context: 'api/server/controllers/agents/request.js - resumable user message',
           });
@@ -313,7 +320,7 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
         // CRITICAL: Save response message BEFORE emitting final event.
         // This prevents race conditions where the client sends a follow-up message
         // before the response is saved to the database, causing orphaned parentMessageIds.
-        if (client.savedMessageIds && !client.savedMessageIds.has(messageId)) {
+        if (!isPIEndpoint && client.savedMessageIds && !client.savedMessageIds.has(messageId)) {
           await saveMessage(
             req,
             {
@@ -505,6 +512,8 @@ const _LegacyAgentController = async (req, res, next, initializeClient, addTitle
   // Match the same logic used for conversationId generation above
   const isNewConvo = !reqConversationId || reqConversationId === 'new';
   const userId = req.user.id;
+  // PI endpoint: messages are recorded by the PI backend, skip local saves.
+  const isPIEndpoint = String(endpointOption?.endpoint) === 'pi';
 
   // Create handler to avoid capturing the entire parent scope
   let getReqData = (data = {}) => {
@@ -713,7 +722,7 @@ const _LegacyAgentController = async (req, res, next, initializeClient, addTitle
       res.end();
 
       // Save the message if needed
-      if (client.savedMessageIds && !client.savedMessageIds.has(messageId)) {
+      if (!isPIEndpoint && client.savedMessageIds && !client.savedMessageIds.has(messageId)) {
         await saveMessage(
           req,
           { ...finalResponse, user: userId, streamLog: readStreamLog(client) },
@@ -744,7 +753,7 @@ const _LegacyAgentController = async (req, res, next, initializeClient, addTitle
     }
 
     // Save user message if needed
-    if (!client.skipSaveUserMessage) {
+    if (!isPIEndpoint && !client.skipSaveUserMessage) {
       await saveMessage(req, userMessage, {
         context: "api/server/controllers/agents/request.js - don't skip saving user message",
       });
