@@ -85,7 +85,6 @@ export default function useChatFunctions({
       conversationId = null,
       messageId = null,
       keywordDefinitions = [],
-      piContextHandoff = false,
     },
     {
       editedContent = null,
@@ -191,12 +190,6 @@ export default function useChatFunctions({
       },
       convo,
     ) as TEndpointOption;
-    if (
-      String(endpoint) === 'pi' &&
-      (piContextHandoff || targetParentMessage?.metadata?.piContextHandoff === true)
-    ) {
-      (endpointOption as TEndpointOption & { piContextHandoff?: boolean }).piContextHandoff = true;
-    }
     if (endpoint !== EModelEndpoint.agents) {
       endpointOption.key = getExpiry();
       endpointOption.thread_id = thread_id;
@@ -221,7 +214,6 @@ export default function useChatFunctions({
       messageId: isContinued && messageId != null && messageId ? messageId : intermediateId,
       thread_id,
       error: false,
-      metadata: piContextHandoff ? { piContextHandoff: true } : undefined,
     };
 
     const submissionFiles = overrideFiles ?? targetParentMessage?.files;

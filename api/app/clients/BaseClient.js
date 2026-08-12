@@ -1034,6 +1034,11 @@ class BaseClient {
    * @param {Partial<TMessage>} message
    */
   async updateMessageInDatabase(message) {
+    // PI endpoint: messages are not saved locally (recorded by PI backend),
+    // so skip updates that would fail with "Message not found".
+    if (String(this.options?.endpoint) === 'pi') {
+      return;
+    }
     await updateMessage(this.options.req, message);
   }
 

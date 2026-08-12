@@ -321,7 +321,6 @@ export const endpointSchema = baseEndpointSchema.merge(
     summaryModel: z.string().optional(),
     iconURL: z.string().optional(),
     modelDisplayLabel: z.string().optional(),
-    piMaxContextTokens: coerceNumber.optional(),
     headers: z.record(z.any()).optional(),
     addParams: z.record(z.any()).optional(),
     dropParams: z.array(z.string()).optional(),

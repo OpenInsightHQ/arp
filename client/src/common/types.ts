@@ -342,7 +342,6 @@ export type TAskProps = {
   conversationId?: string | null;
   clientTimestamp?: string;
   keywordDefinitions?: string[];
-  piContextHandoff?: boolean;
 };
 
 export type TOptions = {

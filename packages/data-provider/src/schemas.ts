@@ -769,8 +769,6 @@ export const tConversationSchema = z.object({
   assistant_id: z.string().optional(),
   /* agents */
   agent_id: z.string().optional(),
-  /* Explicit one-turn PI context handoff triggered by @ ONE PI */
-  piContextHandoff: z.boolean().optional(),
   /* AWS Bedrock */
   region: z.string().optional(),
   maxTokens: coerceNumber.optional(),

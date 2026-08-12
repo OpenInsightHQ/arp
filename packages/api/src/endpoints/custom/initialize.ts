@@ -34,7 +34,6 @@ function buildCustomOptions(
     titleModel: endpointConfig.titleModel,
     summaryModel: endpointConfig.summaryModel,
     modelDisplayLabel: endpointConfig.modelDisplayLabel,
-    piMaxContextTokens: endpointConfig.piMaxContextTokens,
     titleMethod: endpointConfig.titleMethod ?? 'completion',
     contextStrategy: endpointConfig.summarize ? 'summarize' : null,
     directEndpoint: endpointConfig.directEndpoint,
@@ -161,15 +160,12 @@ export async function initializeCustom({
   };
 
   const modelOptions = { ...(model_parameters ?? {}), user: userId };
-  const requestBody = req.body as typeof req.body & { piContextHandoff?: boolean };
   const finalClientOptions = {
     modelOptions,
     ...clientOptions,
     headers: buildPiForwardHeaders(
       clientOptions.headers as Record<string, string>,
       req.body?.conversationId,
-      requestBody?.piContextHandoff,
-      endpointConfig.piMaxContextTokens,
       getLangFromReq(req),
     ),
   };

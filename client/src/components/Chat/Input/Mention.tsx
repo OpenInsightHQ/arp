@@ -23,7 +23,6 @@ export default function Mention({
   placeholder = 'com_ui_mention',
   includeAssistants = true,
   onMentionSelect,
-  onPiMentionSelect,
 }: {
   conversation: TConversation | null;
   setShowMentionPopover: SetterOrUpdater<boolean>;
@@ -33,7 +32,6 @@ export default function Mention({
   placeholder?: TranslationKeys;
   includeAssistants?: boolean;
   onMentionSelect?: (agentName: string, agentId?: string) => void;
-  onPiMentionSelect?: () => void;
 }) {
   const localize = useLocalize();
   const assistantsMap = useAssistantsMapContext();
@@ -90,9 +88,6 @@ export default function Mention({
       if (isAtMention && (mention.type === EModelEndpoint.agents || mention.type === 'pi')) {
         onSelectMention?.(mention);
         onMentionSelect?.(agentName, mention.value);
-        if (mention.type === 'pi') {
-          onPiMentionSelect?.();
-        }
       } else {
         onSelectMention?.(mention);
       }

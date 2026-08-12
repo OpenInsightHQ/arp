@@ -169,7 +169,7 @@ PI ("One Pi") is a custom endpoint defined in `librechat.yaml` with `baseURL: ${
 | Path | Route | Controller | System Prompt Source |
 |---|---|---|---|
 | **Frontend UI chat** | `/api/agents/chat/pi` → custom endpoint `baseURL` | `piChatCompletionsController` (OpenAI-compat) | PI backend injects its own; LibreChat passes `additional_instructions` |
-| **Direct PI routes** | `/api/pi/prompt`, `/api/pi/chat/completions` | `piChatCompletionsController` or SSE forward | `getPiSystemPrompt(lang)` from DB, passed as `systemPrompt` field |
+| **Direct PI routes** | `/api/pi/prompt`, `/api/pi/chat/completions` | `piChatCompletionsController` or SSE forward | `buildSystemPromptWithMemory({ userId, req, lang })` from DB + user memories, passed as `systemPrompt` field |
 
 ### Frontend Chat Flow (`/api/agents/chat/pi`)
 
@@ -177,13 +177,15 @@ PI ("One Pi") is a custom endpoint defined in `librechat.yaml` with `baseURL: ${
 Browser → /api/agents/chat/pi → initializeAgent (packages/api/src/agents/initialize.ts)
   → custom endpoint forwards to ${ARP_HOST}/api/pi/chat/completions
   → piChatCompletionsController (api/server/controllers/pi/chatCompletions.js)
-  → fetch ${PI_HOST}/prompt with { systemPrompt: getPiSystemPrompt(lang) }
+  → fetch ${PI_HOST}/prompt with { message: userMessage, systemPrompt: buildSystemPromptWithMemory(...) }
 ```
 
 - PI agent record has **empty instructions** (`provider` shows as `openAI` due to custom endpoint override).
-- `buildPiForwardHeaders` (`packages/api/src/endpoints/custom/piRequestHeaders.ts`) adds `X-Conversation-Id`, `X-PI-Context-Handoff`, `X-PI-Max-Context-Tokens`, and `Accept-Language` headers to the forwarded request.
+- `buildPiForwardHeaders` (`packages/api/src/endpoints/custom/piRequestHeaders.ts`) adds `X-Conversation-Id` and `Accept-Language` headers to the forwarded request.
+- `buildSystemPromptWithMemory({ userId, req, lang })` (`api/server/controllers/pi/chatCompletions.js`) combines `getPiSystemPrompt(lang)` with the user's long-term memories (permission-checked, formatted by type) into a single `systemPrompt` string.
 - `getPiSystemPrompt(lang)` (`packages/api/src/prompts/systemPromptService.ts`) reads `pi.system` from the `systemprompts` collection and appends `<available_prompts>`.
 - System prompt seeding is handled by the DMP project (`init-data/system-prompts/*.yaml`), not by LibreChat.
+- **`message` field** contains only the current user message (no conversation history injection).
 
 ### Key Files
 

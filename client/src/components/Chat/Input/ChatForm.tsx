@@ -99,7 +99,6 @@ const ChatForm = memo(({ index = 0 }: { index?: number }) => {
   const submitButtonRef = useRef<HTMLButtonElement>(null);
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
   const mentionAgentRef = useRef<string | null>(null);
-  const piContextHandoffRef = useRef(false);
   const prevAgentIdRef = useRef<string | null>(null);
   const skipDeleteDetectRef = useRef(false);
   const setConversation = useSetRecoilState(store.conversationByIndex(index));
@@ -281,9 +280,7 @@ const ChatForm = memo(({ index = 0 }: { index?: number }) => {
       originalSubmitMessage({
         text: data.text,
         keywordDefinitions,
-        piContextHandoff: piContextHandoffRef.current,
       });
-      piContextHandoffRef.current = false;
       setSelectedKeywords([]);
     },
     [originalSubmitMessage, selectedKeywords],
@@ -340,12 +337,8 @@ const ChatForm = memo(({ index = 0 }: { index?: number }) => {
     const agentTag = `@${mentionAgentRef.current}`;
     if (!textValue?.includes(agentTag)) {
       const prevId = prevAgentIdRef.current;
-      const wasPiMention = isPI && piContextHandoffRef.current;
       mentionAgentRef.current = null;
       prevAgentIdRef.current = null;
-      if (wasPiMention) {
-        piContextHandoffRef.current = false;
-      }
       if (prevId && conversation) {
         setConversation({
           ...conversation,
@@ -353,7 +346,7 @@ const ChatForm = memo(({ index = 0 }: { index?: number }) => {
         });
       }
     }
-  }, [textValue, conversation, isPI, setConversation]);
+  }, [textValue, conversation, setConversation]);
 
   useEffect(() => {
     if (isEditingBadges && backupBadges.length === 0) {
@@ -425,9 +418,6 @@ const ChatForm = memo(({ index = 0 }: { index?: number }) => {
                 mentionAgentRef.current = agentName;
                 prevAgentIdRef.current = conversation?.agent_id ?? null;
                 skipDeleteDetectRef.current = true;
-              }}
-              onPiMentionSelect={() => {
-                piContextHandoffRef.current = true;
               }}
             />
           )}

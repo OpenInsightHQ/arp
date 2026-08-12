@@ -15,7 +15,7 @@ export default function useSubmitMessage() {
   const setActivePrompt = useSetRecoilState(store.activePromptByIndex(index));
 
   const submitMessage = useCallback(
-    (data?: { text: string; keywordDefinitions?: string[]; piContextHandoff?: boolean }) => {
+    (data?: { text: string; keywordDefinitions?: string[] }) => {
       if (!data) {
         return console.warn('No data provided to submitMessage');
       }
@@ -31,7 +31,6 @@ export default function useSubmitMessage() {
         {
           text: data.text,
           keywordDefinitions: data.keywordDefinitions,
-          piContextHandoff: data.piContextHandoff,
         },
         {
           addedConvo: addedConvo ?? undefined,

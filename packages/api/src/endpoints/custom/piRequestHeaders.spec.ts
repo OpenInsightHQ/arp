@@ -1,33 +1,28 @@
 import { buildPiForwardHeaders } from './piRequestHeaders';
 
 describe('buildPiForwardHeaders', () => {
-  it.each([1000, 200000])('forwards DMP piMaxContextTokens value %s', (maxContextTokens) => {
+  it('forwards conversation id and language', () => {
     const headers = buildPiForwardHeaders(
       { Authorization: 'Bearer test' },
       'conversation-1',
-      true,
-      maxContextTokens,
       'zh-Hans',
     );
 
     expect(headers).toEqual({
       Authorization: 'Bearer test',
       'X-Conversation-Id': 'conversation-1',
-      'X-PI-Context-Handoff': 'true',
-      'X-PI-Max-Context-Tokens': String(maxContextTokens),
       'Accept-Language': 'zh-Hans',
     });
   });
 
-  it('marks ordinary PI requests as no handoff', () => {
-    const headers = buildPiForwardHeaders(undefined, undefined, false, 100000);
+  it('defaults conversation id to empty string', () => {
+    const headers = buildPiForwardHeaders(undefined, undefined);
 
-    expect(headers['X-PI-Context-Handoff']).toBe('false');
-    expect(headers['X-PI-Max-Context-Tokens']).toBe('100000');
+    expect(headers['X-Conversation-Id']).toBe('');
   });
 
   it('omits Accept-Language when lang is not provided', () => {
-    const headers = buildPiForwardHeaders(undefined, undefined, false, 100000);
+    const headers = buildPiForwardHeaders(undefined, undefined);
 
     expect(headers['Accept-Language']).toBeUndefined();
   });

@@ -10,7 +10,6 @@ const { GalleryVersion } = require('~/models/GalleryVersion');
 const { getMessages, findUser } = require('~/models');
 const { logger } = require('@librechat/data-schemas');
 const { safeHttpStatus, sanitizeForLog } = require('~/server/utils/sanitize');
-const { getPiMaxContextTokens, selectHistoryMessages } = require('./contextBudget');
 const {
   buildSolidificationArtifactQuery,
   getMessagesThroughTarget,
@@ -400,46 +399,6 @@ async function handleArtifactSolidification(message, userId, conversationId) {
   }
 }
 
-async function loadConversationHistory(conversationId, maxContextTokens, currentUserMessage) {
-  if (!conversationId) {
-    console.log('[PI Chat] No valid conversationId, skipping history load');
-    return '';
-  }
-
-  const isValidId = mongoose.Types.ObjectId.isValid(conversationId) ||
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(conversationId);
-  if (!isValidId) {
-    console.log('[PI Chat] No valid conversationId, skipping history load');
-    return '';
-  }
-
-  try {
-    const dbMessages = await getMessages({ conversationId });
-    if (!dbMessages || dbMessages.length === 0) {
-      console.log('[PI Chat] No conversation messages found for:', sanitizeForLog(conversationId));
-      return '';
-    }
-
-    const { lines: historyLines, usedTokens, historyBudget } = selectHistoryMessages(
-      dbMessages,
-      currentUserMessage,
-      maxContextTokens,
-    );
-
-    if (historyLines.length === 0) {
-      console.log('[PI Chat] No valid history messages after filtering');
-      return '';
-    }
-
-    console.log('[PI Chat] History loaded, messages:', historyLines.length, 'estimatedTokens:', usedTokens, 'budget:', historyBudget);
-    return '[对话历史]\n' + historyLines.join('\n') + '\n[/对话历史]\n\n';
-  } catch (historyError) {
-    console.error('[PI Chat] History load failed:', historyError.message);
-    logger.error('[PI Chat] History load error:', historyError);
-    return '';
-  }
-}
-
 function extractLastUserMessage(messages) {
   let lastUserMsg = null;
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -465,19 +424,9 @@ function extractLastUserMessage(messages) {
   return userMessage;
 }
 
-async function buildFinalUserMessage({ userMessage, conversationId, userId, req, handoff, maxContextTokens }) {
-  const historyText = handoff
-    ? await loadConversationHistory(conversationId, maxContextTokens, userMessage)
-    : '';
-
-  let finalUserMessage = userMessage;
-  if (historyText) {
-    finalUserMessage = historyText + '[用户消息]\n' + userMessage;
-  }
-
-  if (userId === 'system') {
-    console.log('[PI Chat] Skipping memory query for system user');
-    return finalUserMessage;
+async function loadMemoryText(userId, req) {
+  if (!userId || userId === 'system') {
+    return '';
   }
 
   try {
@@ -502,14 +451,14 @@ async function buildFinalUserMessage({ userMessage, conversationId, userId, req,
       logger.debug(
         `[PI Chat] User ${userId} does not have USE/READ permission for memories, skipping injection`,
       );
-      return finalUserMessage;
+      return '';
     }
 
     if (req.user?.personalization?.memories === false) {
       logger.debug(
         `[PI Chat] User ${userId} has opted out of memories, skipping injection`,
       );
-      return finalUserMessage;
+      return '';
     }
 
     const userIdObj = new mongoose.Types.ObjectId(userId);
@@ -517,19 +466,24 @@ async function buildFinalUserMessage({ userMessage, conversationId, userId, req,
 
     if (!memories || memories.length === 0) {
       console.log('[PI Chat] No memories found for user:', sanitizeForLog(userId));
-      return finalUserMessage;
+      return '';
     }
 
-    const memoryText = formatMemories(memories);
-    if (historyText) {
-      return historyText + memoryText + '\n[用户消息]\n' + userMessage;
-    }
-    return memoryText + '\n[用户消息]\n' + userMessage;
+    return formatMemories(memories);
   } catch (memoryError) {
     console.error('[PI Chat] Memory query failed:', memoryError.message);
     logger.error('[PI Chat] Memory query error:', memoryError);
-    return finalUserMessage;
+    return '';
   }
+}
+
+async function buildSystemPromptWithMemory({ userId, req, lang }) {
+  const basePrompt = await getPiSystemPrompt(lang);
+  const memoryText = await loadMemoryText(userId, req);
+  if (!memoryText) {
+    return basePrompt;
+  }
+  return (basePrompt ? basePrompt + '\n\n' : '') + memoryText;
 }
 
 function writeSseChunk(res, payload) {
@@ -616,7 +570,7 @@ async function handleSolidificationRequest({ userMessage, userId, conversationId
   return true;
 }
 
-async function runNonStreamingPI({ finalUserMessage, agentId, sessionId, userId, res, streamStartTime, lang }) {
+async function runNonStreamingPI({ finalUserMessage, agentId, sessionId, userId, res, streamStartTime, systemPrompt }) {
   try {
     const response = await fetch(`${PI_HOST}/prompt`, {
       method: 'POST',
@@ -631,7 +585,7 @@ async function runNonStreamingPI({ finalUserMessage, agentId, sessionId, userId,
         sessionId,
         cwd: null,
         stream: true,
-        systemPrompt: await getPiSystemPrompt(lang),
+        systemPrompt,
       }),
     });
 
@@ -685,7 +639,7 @@ async function runNonStreamingPI({ finalUserMessage, agentId, sessionId, userId,
   }
 }
 
-async function streamFromPI({ res, chatId, created, finalUserMessage, agentId, sessionId, userId, streamStartTime, lang }) {
+async function streamFromPI({ res, chatId, created, finalUserMessage, agentId, sessionId, userId, streamStartTime, systemPrompt }) {
   setSseHeaders(res);
   writeSseChunk(res, buildChunk(chatId, created, { role: 'assistant', content: '' }));
 
@@ -723,7 +677,7 @@ async function streamFromPI({ res, chatId, created, finalUserMessage, agentId, s
         sessionId,
         cwd: null,
         stream: true,
-        systemPrompt: await getPiSystemPrompt(lang),
+        systemPrompt,
       }),
       signal: abortController.signal,
     });
@@ -877,8 +831,6 @@ const piChatCompletionsController = async (req, res) => {
   const agentId = encodeEphemeralAgentId({ endpoint: 'pi', model, sender });
   const conversationId = req.headers['x-conversation-id'] || '';
   const sessionId = conversationId || 'new';
-  const handoff = req.headers['x-pi-context-handoff'] === 'true';
-  const maxContextTokens = getPiMaxContextTokens(req.headers);
 
   const solidHandled = await handleSolidificationRequest({
     userMessage,
@@ -891,27 +843,20 @@ const piChatCompletionsController = async (req, res) => {
     return;
   }
 
-  const finalUserMessage = await buildFinalUserMessage({
-    userMessage,
-    conversationId,
-    userId,
-    req,
-    handoff,
-    maxContextTokens,
-  });
+  const lang = getLangFromReq(req);
+  const systemPrompt = await buildSystemPromptWithMemory({ userId, req, lang });
 
   const streamStartTime = Date.now();
-  const lang = getLangFromReq(req);
 
   if (!stream) {
     return runNonStreamingPI({
-      finalUserMessage,
+      finalUserMessage: userMessage,
       agentId,
       sessionId,
       userId,
       res,
       streamStartTime,
-      lang,
+      systemPrompt,
     });
   }
 
@@ -922,17 +867,18 @@ const piChatCompletionsController = async (req, res) => {
     res,
     chatId,
     created,
-    finalUserMessage,
+    finalUserMessage: userMessage,
     agentId,
     sessionId,
     userId,
     streamStartTime,
-    lang,
+    systemPrompt,
   });
 };
 
 module.exports = {
   piChatCompletionsController,
+  buildSystemPromptWithMemory,
   PI_HOST,
   PI_API_KEY,
 };

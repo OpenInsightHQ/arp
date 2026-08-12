@@ -50,7 +50,6 @@ export type TEndpointOption = Pick<
   | 'stop'
   | 'region'
   | 'additionalModelRequestFields'
-  | 'piContextHandoff'
   // Anthropic-specific
   | 'promptCache'
   | 'thinking'
@@ -76,7 +75,6 @@ export type TEndpointOption = Pick<
 > & {
   // Fields specific to endpoint options that don't exist on TConversation
   modelDisplayLabel?: string;
-  piContextHandoff?: boolean;
   key?: string | null;
   /** @deprecated Assistants API */
   thread_id?: string;
