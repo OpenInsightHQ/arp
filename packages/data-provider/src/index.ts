@@ -84,7 +84,10 @@ export {
   updateTaskQueueItem,
   deleteTaskQueueItem,
   respondTaskQueueItem,
+  getTasksByConversation,
+  submitTaskQueueItem,
   type TaskQueueItem,
+  type TaskFormField,
 } from './data-service';
 
 /* Skills */

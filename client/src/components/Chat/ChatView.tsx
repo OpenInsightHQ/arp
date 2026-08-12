@@ -24,6 +24,7 @@ import Landing from './Landing';
 import Header from './Header';
 import Footer from './Footer';
 import FreezeConfirmPanel from './FreezeSkill/FreezeConfirmPanel';
+import ConversationTaskList from './TaskList/ConversationTaskList';
 import { cn } from '~/utils';
 import store from '~/store';
 
@@ -72,7 +73,9 @@ function ChatView({ index = 0 }: { index?: number }) {
   // Auto-send pending task message (from Task Hub respond)
   useEffect(() => {
     const pending = sessionStorage.getItem('pendingTaskMessage');
-    if (!pending) { return; }
+    if (!pending) {
+      return;
+    }
     try {
       const { message, taskId, timestamp } = JSON.parse(pending);
       // Only send if within 30 seconds
@@ -81,7 +84,9 @@ function ChatView({ index = 0 }: { index?: number }) {
         return;
       }
       // Only send when we have a valid conversation (new or existing)
-      if (!conversationId) { return; }
+      if (!conversationId) {
+        return;
+      }
 
       // Check if endpoint is ready
       const currentEndpoint = chatHelpers.conversation?.endpoint;
@@ -99,7 +104,10 @@ function ChatView({ index = 0 }: { index?: number }) {
             clearInterval(pollInterval);
             sessionStorage.removeItem('pendingTaskMessage');
             sessionStorage.setItem('pendingTaskId', taskId);
-            console.log('[ChatView] Endpoint ready, sending task message', { taskId, endpoint: ep });
+            console.log('[ChatView] Endpoint ready, sending task message', {
+              taskId,
+              endpoint: ep,
+            });
             setTimeout(() => {
               chatHelpers.ask({ text: message }, {});
             }, 300);
@@ -125,10 +133,15 @@ function ChatView({ index = 0 }: { index?: number }) {
   // Write back conversationId to task after ask creates a real conversation
   useEffect(() => {
     const pendingTaskId = sessionStorage.getItem('pendingTaskId');
-    if (!pendingTaskId || !conversationId || conversationId === 'new') { return; }
+    if (!pendingTaskId || !conversationId || conversationId === 'new') {
+      return;
+    }
     // conversationId changed from 'new' to a real ID — write it back to the task
     sessionStorage.removeItem('pendingTaskId');
-    console.log('[ChatView] Writing back conversationId to task', { pendingTaskId, conversationId });
+    console.log('[ChatView] Writing back conversationId to task', {
+      pendingTaskId,
+      conversationId,
+    });
     updateTaskQueueItem(pendingTaskId, {
       metadata: { conversationId },
     }).catch((err) => console.error('[ChatView] Failed to write back conversationId:', err));
@@ -142,11 +155,7 @@ function ChatView({ index = 0 }: { index?: number }) {
   // Restore file from URL parameter (file_info)
   useEffect(() => {
     const restoreFile = async () => {
-      if (
-        !fileRestored.current &&
-        conversationId === Constants.NEW_CONVO &&
-        searchParams
-      ) {
+      if (!fileRestored.current && conversationId === Constants.NEW_CONVO && searchParams) {
         const fileInfoEncoded = searchParams.get('file_info');
 
         if (fileInfoEncoded) {
@@ -225,6 +234,9 @@ function ChatView({ index = 0 }: { index?: number }) {
                   )}
                 >
                   {content}
+                  {!isLandingPage && conversationId && conversationId !== Constants.NEW_CONVO && (
+                    <ConversationTaskList conversationId={conversationId} />
+                  )}
                   <div
                     className={cn(
                       'w-full',

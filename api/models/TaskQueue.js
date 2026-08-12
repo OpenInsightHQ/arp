@@ -35,6 +35,9 @@ const TaskQueueSchema = new mongoose.Schema(
     sourceSessionId: {
       type: String,
     },
+    sourceTurnSeq: {
+      type: Number,
+    },
 
     // === 任务内容 ===
     type: {
@@ -52,13 +55,66 @@ const TaskQueueSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ['pending', 'accepted', 'in_progress', 'completed', 'rejected', 'dismissed'],
+      enum: [
+        'pending',
+        'accepted',
+        'in_progress',
+        'waiting_agent',
+        'running',
+        'completed',
+        'rejected',
+        'dismissed',
+        'failed',
+        'aborted',
+      ],
       default: 'pending',
     },
     priority: {
       type: String,
       enum: ['low', 'medium', 'high'],
       default: 'medium',
+    },
+
+    // === 结构化表单 ===
+    formType: {
+      type: String,
+      enum: ['free_text', 'choice', 'form', 'confirmation'],
+      default: 'free_text',
+    },
+    choices: [
+      {
+        label: String,
+        value: String,
+        description: String,
+      },
+    ],
+    fields: [
+      {
+        name: String,
+        label: String,
+        fieldType: {
+          type: String,
+          enum: ['text', 'textarea', 'number', 'select', 'multiselect', 'date'],
+        },
+        required: {
+          type: Boolean,
+          default: false,
+        },
+        options: [String],
+        default: mongoose.Schema.Types.Mixed,
+      },
+    ],
+    formResponse: {
+      type: mongoose.Schema.Types.Mixed,
+      default: {},
+    },
+
+    // === Subagent 关联 ===
+    subagentTaskId: {
+      type: String,
+    },
+    subagentName: {
+      type: String,
     },
 
     // === 扩展信息 ===
@@ -95,6 +151,8 @@ const TaskQueueSchema = new mongoose.Schema(
 TaskQueueSchema.index({ toUserId: 1, status: 1 });
 TaskQueueSchema.index({ fromUserId: 1, status: 1 });
 TaskQueueSchema.index({ toUserId: 1, type: 1 });
+TaskQueueSchema.index({ sourceConversationId: 1, sourceTurnSeq: 1 });
+TaskQueueSchema.index({ subagentTaskId: 1 });
 
 const TaskQueue = mongoose.models.TaskQueue || mongoose.model('TaskQueue', TaskQueueSchema);
 

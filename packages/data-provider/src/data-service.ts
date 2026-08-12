@@ -1391,19 +1391,35 @@ export type TaskQueueItem = {
   fromAgentId?: string;
   sourceConversationId?: string;
   sourceSessionId?: string;
+  sourceTurnSeq?: number;
   type: 'ai_pending' | 'collaboration' | 'manual';
   title: string;
   description?: string;
-  status: 'pending' | 'accepted' | 'in_progress' | 'completed' | 'rejected' | 'dismissed';
+  status: 'pending' | 'accepted' | 'in_progress' | 'waiting_agent' | 'running' | 'completed' | 'rejected' | 'dismissed' | 'failed' | 'aborted';
   priority: 'high' | 'medium' | 'low';
   metadata?: Record<string, unknown>;
   resultSummary?: string;
   userResponse?: string;
   callbackUrl?: string;
+  formType?: 'free_text' | 'choice' | 'form' | 'confirmation';
+  choices?: { label: string; value: string; description?: string }[];
+  fields?: TaskFormField[];
+  formResponse?: Record<string, unknown>;
+  subagentTaskId?: string;
+  subagentName?: string;
   completedAt?: string;
   expiresAt?: string;
   createdAt: string;
   updatedAt: string;
+};
+
+export type TaskFormField = {
+  name: string;
+  label: string;
+  fieldType: 'text' | 'textarea' | 'number' | 'select' | 'multiselect' | 'date';
+  required?: boolean;
+  options?: string[];
+  default?: unknown;
 };
 
 export function getTaskQueue(params?: { status?: string; type?: string; page?: number; limit?: number }): Promise<{ tasks: TaskQueueItem[]; total: number; page: number; limit: number; totalPages: number }> {
@@ -1425,6 +1441,15 @@ export function deleteTaskQueueItem(taskId: string): Promise<{ success: boolean 
 
 export function respondTaskQueueItem(taskId: string, userResponse: string): Promise<{ taskId: string; status: string }> {
   return request.post(`${endpoints.taskQueueItem(taskId)}/respond`, { userResponse });
+}
+
+export function getTasksByConversation(conversationId: string, status?: string): Promise<{ tasks: TaskQueueItem[] }> {
+  const query = status ? `?status=${encodeURIComponent(status)}` : '';
+  return request.get(`${endpoints.taskQueue()}/by-conversation/${encodeURIComponent(conversationId)}${query}`);
+}
+
+export function submitTaskQueueItem(taskId: string, formResponse: Record<string, unknown>): Promise<{ taskId: string; status: string }> {
+  return request.post(`${endpoints.taskQueueItem(taskId)}/submit`, { formResponse });
 }
 
 export function getPIFiles(agentId: string, sessionId: string): Promise<PIFilesResponse> {

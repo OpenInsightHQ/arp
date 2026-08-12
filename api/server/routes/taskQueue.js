@@ -184,7 +184,13 @@ router.post('/', requireTaskQueueAuth, async (req, res) => {
       expiresAt,
       sourceConversationId,
       sourceSessionId,
+      sourceTurnSeq,
       priority,
+      formType,
+      choices,
+      fields,
+      subagentTaskId,
+      subagentName,
     } = req.body;
 
     // 校验必填字段
@@ -212,6 +218,7 @@ router.post('/', requireTaskQueueAuth, async (req, res) => {
       fromAgentId: fromAgentId || undefined,
       sourceConversationId: sourceConversationId || undefined,
       sourceSessionId: sourceSessionId || undefined,
+      sourceTurnSeq: sourceTurnSeq || undefined,
       type,
       title,
       description: description || undefined,
@@ -219,6 +226,11 @@ router.post('/', requireTaskQueueAuth, async (req, res) => {
       metadata: metadata || {},
       callbackUrl: callbackUrl || undefined,
       expiresAt: expiresAt ? new Date(expiresAt) : undefined,
+      formType: formType || 'free_text',
+      choices: choices || undefined,
+      fields: fields || undefined,
+      subagentTaskId: subagentTaskId || undefined,
+      subagentName: subagentName || undefined,
     };
 
     // 移除 undefined 字段，避免 mongoose 警告
@@ -273,9 +285,20 @@ router.patch('/:taskId', requireTaskQueueAuth, async (req, res) => {
     const isApiKey = req._authMethod === 'api-key';
 
     // api-key 认证可更新的字段
-    const apiKeyFields = ['title', 'description', 'metadata', 'priority', 'status', 'callbackUrl', 'expiresAt', 'resultSummary'];
+    const apiKeyFields = [
+      'title',
+      'description',
+      'metadata',
+      'priority',
+      'status',
+      'callbackUrl',
+      'expiresAt',
+      'resultSummary',
+      'subagentTaskId',
+      'subagentName',
+    ];
     // JWT 认证可更新的字段（原有逻辑）
-    const jwtFields = ['status', 'resultSummary', 'metadata', 'sourceConversationId'];
+    const jwtFields = ['status', 'resultSummary', 'metadata', 'sourceConversationId', 'formResponse'];
 
     const allowedFields = isApiKey ? apiKeyFields : jwtFields;
     const update = {};
@@ -284,7 +307,18 @@ router.patch('/:taskId', requireTaskQueueAuth, async (req, res) => {
       if (req.body[field] !== undefined) {
         // 状态校验
         if (field === 'status') {
-          const validStatuses = ['pending', 'accepted', 'in_progress', 'completed', 'rejected', 'dismissed'];
+          const validStatuses = [
+            'pending',
+            'accepted',
+            'in_progress',
+            'waiting_agent',
+            'running',
+            'completed',
+            'rejected',
+            'dismissed',
+            'failed',
+            'aborted',
+          ];
           if (!validStatuses.includes(req.body[field])) {
             return res.status(400).json({ error: `status must be one of: ${validStatuses.join(', ')}` });
           }
@@ -294,7 +328,7 @@ router.patch('/:taskId', requireTaskQueueAuth, async (req, res) => {
           }
           update.status = req.body[field];
           // 状态流转逻辑
-          if (['completed', 'rejected', 'dismissed'].includes(req.body[field])) {
+          if (['completed', 'rejected', 'dismissed', 'failed', 'aborted'].includes(req.body[field])) {
             update.completedAt = new Date();
           }
         } else if (field === 'priority') {
@@ -420,6 +454,122 @@ router.post('/:taskId/respond', requireTaskQueueAuth, async (req, res) => {
     if (!res.headersSent) {
       return res.status(500).json({ error: error.message });
     }
+  }
+});
+
+// =====================
+// === 新增端点 ===
+// =====================
+
+/**
+ * GET /api/task-queue/by-conversation/:conversationId
+ * 按会话拉取任务列表（前端会话内面板用）
+ * query: ?status=pending
+ */
+router.get('/by-conversation/:conversationId', requireTaskQueueAuth, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { conversationId } = req.params;
+    const { status } = req.query;
+
+    const filter = { sourceConversationId: conversationId };
+    if (status) {
+      filter.status = status;
+    }
+
+    const tasks = await TaskQueue.find(filter).sort({ createdAt: 1 }).lean();
+
+    const visibleTasks = tasks.filter((t) => t.toUserId === userId || t.fromUserId === userId);
+
+    return res.json({ tasks: visibleTasks });
+  } catch (error) {
+    logger.error('[GET /api/task-queue/by-conversation] Error:', error);
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/task-queue/:taskId/submit
+ * 提交表单响应，状态 → waiting_agent
+ * body: { formResponse: object }
+ */
+router.post('/:taskId/submit', requireTaskQueueAuth, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { taskId } = req.params;
+    const { formResponse } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(taskId)) {
+      return res.status(400).json({ error: 'Invalid taskId format' });
+    }
+
+    const task = await TaskQueue.findById(taskId);
+    if (!task) {
+      return res.status(404).json({ error: 'Task not found' });
+    }
+
+    if (task.toUserId !== userId) {
+      return res.status(403).json({ error: 'Only the assignee can submit this task' });
+    }
+
+    if (!['pending', 'accepted'].includes(task.status)) {
+      return res.status(400).json({ error: `Task is ${task.status}, cannot submit` });
+    }
+
+    task.formResponse = formResponse || {};
+    task.userResponse = typeof formResponse === 'string' ? formResponse : JSON.stringify(formResponse);
+    task.status = 'waiting_agent';
+    await task.save();
+
+    logger.info('[POST /api/task-queue/:taskId/submit] Task submitted', {
+      taskId,
+      userId,
+      formType: task.formType,
+    });
+
+    return res.json({ taskId: task._id, status: 'waiting_agent' });
+  } catch (error) {
+    logger.error('[POST /api/task-queue/:taskId/submit] Error:', error);
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/task-queue/:taskId/start
+ * pi 开始处理任务，状态 → running
+ * 需要 api-key 认证（pi 后端调用）
+ */
+router.post('/:taskId/start', requireTaskQueueAuth, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { taskId } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(taskId)) {
+      return res.status(400).json({ error: 'Invalid taskId format' });
+    }
+
+    const task = await TaskQueue.findById(taskId);
+    if (!task) {
+      return res.status(404).json({ error: 'Task not found' });
+    }
+
+    if (!['waiting_agent', 'accepted', 'pending'].includes(task.status)) {
+      return res.status(400).json({ error: `Task is ${task.status}, cannot start` });
+    }
+
+    task.status = 'running';
+    await task.save();
+
+    logger.info('[POST /api/task-queue/:taskId/start] Task started', {
+      taskId,
+      userId,
+      agentId: req.headers['x-agent-id'],
+    });
+
+    return res.json({ taskId: task._id, status: 'running' });
+  } catch (error) {
+    logger.error('[POST /api/task-queue/:taskId/start] Error:', error);
+    return res.status(500).json({ error: error.message });
   }
 });
 
