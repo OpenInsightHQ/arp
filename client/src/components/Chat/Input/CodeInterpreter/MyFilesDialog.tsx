@@ -7,6 +7,7 @@ import {
   Spinner,
   Input,
   Button,
+  useToastContext,
 } from '@librechat/client';
 import { useLocalize } from '~/hooks';
 import {
@@ -51,6 +52,7 @@ import {
   RefreshCw,
   FileArchive,
   Eye,
+  Loader2,
 } from 'lucide-react';
 import { useSetRecoilState } from 'recoil';
 import store from '~/store';
@@ -153,6 +155,7 @@ interface FileItem extends FileManagementFile {
 
 export default function MyFilesDialog({ agentId, sessionId, isOpen, onOpenChange }: MyFilesDialogProps) {
   const localize = useLocalize();
+  const { showToast } = useToastContext();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [currentPath, setCurrentPath] = useState('');
@@ -161,6 +164,7 @@ export default function MyFilesDialog({ agentId, sessionId, isOpen, onOpenChange
   const [sortField, setSortField] = useState<SortField>('lastModified');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
+  const [unzippingPaths, setUnzippingPaths] = useState<Set<string>>(new Set());
 
   const [showNewFolderDialog, setShowNewFolderDialog] = useState(false);
   const [showRenameDialog, setShowRenameDialog] = useState(false);
@@ -415,13 +419,22 @@ export default function MyFilesDialog({ agentId, sessionId, isOpen, onOpenChange
 
   const handleUnzip = useCallback(async (path: string) => {
     const body: FileManagementUnzipBody = { agentId, sessionId, path };
+    setUnzippingPaths((prev) => new Set(prev).add(path));
     try {
       await unzipFileMutation.mutateAsync(body);
+      showToast({ message: localize('com_arp_unzip_success'), status: 'success' });
       refetch();
     } catch (err) {
       console.error('Unzip failed:', err);
+      showToast({ message: localize('com_arp_unzip_failed'), status: 'error' });
+    } finally {
+      setUnzippingPaths((prev) => {
+        const next = new Set(prev);
+        next.delete(path);
+        return next;
+      });
     }
-  }, [agentId, sessionId, unzipFileMutation, refetch]);
+  }, [agentId, sessionId, unzipFileMutation, refetch, showToast, localize]);
 
   const handleUpload = useCallback(async () => {
     if (!uploadingFile || isUploading) return;
@@ -537,6 +550,13 @@ export default function MyFilesDialog({ agentId, sessionId, isOpen, onOpenChange
               <span className="text-xs">{localize('com_arp_refresh')}</span>
             </Button>
           </div>
+
+          {unzippingPaths.size > 0 && (
+            <div className="mb-2 flex items-center gap-2 rounded-md bg-blue-50 px-4 py-2 text-sm text-blue-700 dark:bg-blue-900/20 dark:text-blue-300">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              <span>{localize('com_arp_unzipping_count', { count: unzippingPaths.size })}</span>
+            </div>
+          )}
 
           <div className="mb-2 flex items-center gap-2 px-4 text-sm">
             <button
@@ -686,13 +706,29 @@ export default function MyFilesDialog({ agentId, sessionId, isOpen, onOpenChange
                                 </button>
                               )}
                               {!file.isDirectory && getFileType(file.name, false) === 'archive' && (
-                                <button
-                                  onClick={() => handleUnzip(getFullPath(file.name))}
-                                  className="rounded p-1 text-gray-500 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-600"
-                                  title={localize('com_arp_unzip')}
-                                >
-                                  <FileArchive className="h-4 w-4" />
-                                </button>
+                                (() => {
+                                  const fullPath = getFullPath(file.name);
+                                  const isUnzipping = unzippingPaths.has(fullPath);
+                                  return (
+                                    <button
+                                      onClick={() => handleUnzip(fullPath)}
+                                      disabled={isUnzipping}
+                                      className={cn(
+                                        'rounded p-1',
+                                        isUnzipping
+                                          ? 'text-blue-500 dark:text-blue-400'
+                                          : 'text-gray-500 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-600',
+                                      )}
+                                      title={localize(isUnzipping ? 'com_arp_unzipping' : 'com_arp_unzip')}
+                                    >
+                                      {isUnzipping ? (
+                                        <Loader2 className="h-4 w-4 animate-spin" />
+                                      ) : (
+                                        <FileArchive className="h-4 w-4" />
+                                      )}
+                                    </button>
+                                  );
+                                })()
                               )}
                               <button
                                 onClick={() => { setRenameTarget({ path: file.path || file.name, name: file.name }); setShowRenameDialog(true); }}

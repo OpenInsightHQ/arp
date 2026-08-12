@@ -70,12 +70,12 @@ async function forwardPIRequest(req, res, endpoint) {
     const buffer = await response.arrayBuffer();
     res.send(Buffer.from(buffer));
   } catch (error) {
-    console.error(`[PI Route] Error: ${error.message}`);
+    console.error(`[PI Route] Error: ${error.message}`, error.cause ?? '');
     return res.status(500).json({ error: error.message });
   }
 }
 
-async function forwardPIPostRequest(req, res, endpoint) {
+async function forwardPIPostRequest(req, res, endpoint, options = {}) {
   const { agentId, sessionId } = req.body;
 
   if (!agentId || !sessionId) {
@@ -85,16 +85,22 @@ async function forwardPIPostRequest(req, res, endpoint) {
   const url = `${PI_HOST}${endpoint}`;
   console.log(`[PI Route] POST Forwarding to: ${url}, body:`, JSON.stringify(req.body));
 
+  const fetchOptions = {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'api-key': PI_API_KEY,
+      'X-User-Id': req.user.id,
+    },
+    body: JSON.stringify(req.body),
+  };
+
+  if (options.timeoutMs) {
+    fetchOptions.signal = AbortSignal.timeout(options.timeoutMs);
+  }
+
   try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'api-key': PI_API_KEY,
-        'X-User-Id': req.user.id,
-      },
-      body: JSON.stringify(req.body),
-    });
+    const response = await fetch(url, fetchOptions);
 
     console.log(`[PI Route] POST Response status: ${response.status}`);
 
@@ -109,7 +115,8 @@ async function forwardPIPostRequest(req, res, endpoint) {
     const buffer = await response.arrayBuffer();
     res.send(Buffer.from(buffer));
   } catch (error) {
-    console.error(`[PI Route] POST Error: ${error.message}`);
+    const cause = error.cause ? ` (cause: ${error.cause.code || error.cause.message || error.cause})` : '';
+    console.error(`[PI Route] POST Error: ${error.message}${cause}`);
     return res.status(500).json({ error: error.message });
   }
 }
@@ -192,7 +199,7 @@ router.post('/files/move', requireJwtAuth, async (req, res) => {
 });
 
 router.post('/files/unzip', requireJwtAuth, async (req, res) => {
-  return forwardPIPostRequest(req, res, '/files/unzip');
+  return forwardPIPostRequest(req, res, '/files/unzip', { timeoutMs: 30 * 60 * 1000 });
 });
 
 router.post('/files/batch-delete', requireJwtAuth, async (req, res) => {
