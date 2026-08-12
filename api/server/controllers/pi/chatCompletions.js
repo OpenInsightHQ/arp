@@ -22,77 +22,52 @@ const {
 const PI_HOST = process.env.PI_HOST || process.env.PI_AGENT_URL || 'http://localhost:3000';
 const PI_API_KEY = process.env.PI_API_KEY || 'testkey';
 
-async function getRealFiles(agentId, sessionId, userId) {
+async function getRealFiles(agentId, sessionId, userId, modifiedSince) {
   if (!agentId || !sessionId) return [];
 
-  const allFiles = [];
-  const dirsToVisit = [''];
-  const visited = new Set();
-
   try {
-    while (dirsToVisit.length > 0) {
-      const currentPath = dirsToVisit.shift();
-      const pathKey = currentPath || '/';
-      if (visited.has(pathKey)) continue;
-      visited.add(pathKey);
-
-      let url = `${PI_HOST}/files?agentId=${encodeURIComponent(String(agentId))}&sessionId=${encodeURIComponent(String(sessionId))}`;
-      if (currentPath) {
-        url += `&path=${encodeURIComponent(currentPath)}`;
-      }
-
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: { 'api-key': PI_API_KEY, 'X-User-Id': userId || 'system' },
-      });
-
-      if (!response.ok) {
-        console.warn('[buildFileLinks] PI files API returned', response.status, 'for path:', currentPath);
-        continue;
-      }
-
-      const data = await response.json();
-      const files = data.files || [];
-
-      for (const entry of files) {
-        const entryPath = currentPath ? `${currentPath}/${entry.name}` : entry.name;
-        if (entry.isDirectory) {
-          dirsToVisit.push(entryPath);
-        } else {
-          allFiles.push({ path: entryPath, lastModified: entry.lastModified || '' });
-        }
-      }
+    let url = `${PI_HOST}/files?agentId=${encodeURIComponent(String(agentId))}&sessionId=${encodeURIComponent(String(sessionId))}&recursive=true`;
+    if (modifiedSince) {
+      url += `&modifiedSince=${encodeURIComponent(new Date(modifiedSince).toISOString())}`;
     }
 
-    console.log('[buildFileLinks] getRealFiles found', allFiles.length, 'files:', allFiles.map(f => f.path).join(', '));
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: { 'api-key': PI_API_KEY, 'X-User-Id': userId || 'system' },
+    });
+
+    if (!response.ok) {
+      console.warn('[buildFileLinks] PI files API returned', response.status);
+      return [];
+    }
+
+    const data = await response.json();
+    const files = data.files || [];
+    const realFiles = files
+      .filter((f) => !f.isDirectory)
+      .map((f) => ({ path: f.path || f.name, lastModified: f.lastModified || '' }));
+
+    console.log('[buildFileLinks] getRealFiles found', realFiles.length, 'files (recursive, modifiedSince:', modifiedSince, ')');
+    return realFiles;
   } catch (err) {
     console.error('[buildFileLinks] getRealFiles failed:', err.message);
+    return [];
   }
-
-  return allFiles;
 }
+
+const MAX_FILE_LINKS = 10;
 
 async function buildFileLinks(text, agentId, sessionId, userId, startTime) {
   if (!text || !agentId || !sessionId) return null;
 
-  const realFiles = await getRealFiles(agentId, sessionId, userId);
+  const realFiles = await getRealFiles(agentId, sessionId, userId, startTime);
 
   if (realFiles.length === 0) {
     console.log('[buildFileLinks] No real files found, skipping link injection');
     return null;
   }
 
-  let recentFiles;
-  if (startTime != null) {
-    recentFiles = realFiles.filter(f => new Date(f.lastModified).getTime() >= startTime);
-    console.log('[buildFileLinks] Filtered by startTime:', startTime, '- recent files:', recentFiles.length, 'of', realFiles.length);
-  } else {
-    recentFiles = realFiles;
-  }
-
-  if (recentFiles.length === 0) return null;
-
-  const matchedFiles = recentFiles.filter(f => {
+  const matchedFiles = realFiles.filter(f => {
     const basename = f.path.split('/').pop();
     return text.includes(basename) || text.includes(f.path);
   });
@@ -109,13 +84,18 @@ async function buildFileLinks(text, agentId, sessionId, userId, startTime) {
     }
   }
 
-  const links = uniqueFiles.map(f => {
+  const truncated = uniqueFiles.length > MAX_FILE_LINKS;
+  const displayed = truncated ? uniqueFiles.slice(0, MAX_FILE_LINKS) : uniqueFiles;
+
+  const links = displayed.map(f => {
     const displayName = f.path.split('/').pop();
     const url = `/arp/api/pi/files/download?agentId=${encodeURIComponent(agentId)}&sessionId=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(f.path)}`;
     return `[📄 ${displayName}](${url})`;
   });
 
-  return '\n\n---\n📎 下载文件：' + links.join('  ');
+  const remaining = uniqueFiles.length - MAX_FILE_LINKS;
+  const tail = truncated ? `  ...(+${remaining})` : '';
+  return '\n\n---\n📎 下载文件：' + links.join('  ') + tail;
 }
 
 function formatMemories(memories) {
