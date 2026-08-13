@@ -13,6 +13,8 @@
  */
 
 require('dotenv').config();
+const path = require('path');
+require('module-alias')({ base: path.resolve(__dirname, '..') });
 const mongoose = require('mongoose');
 const { encodeEphemeralAgentId } = require('librechat-data-provider');
 const { getPiSystemPrompt, initializeSystemPromptService } = require('@librechat/api');

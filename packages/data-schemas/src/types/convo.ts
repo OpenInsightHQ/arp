@@ -62,6 +62,8 @@ export interface IConversation extends Document {
    */
   finish_reason?: string;
   expiredAt?: Date;
+  source?: string;
+  sourceDataId?: string;
   createdAt?: Date;
   updatedAt?: Date;
 }
