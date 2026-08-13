@@ -187,6 +187,8 @@ module.exports = {
 
     filters.push({ $or: [{ expiredAt: null }, { expiredAt: { $exists: false } }] });
 
+    filters.push({ $or: [{ source: null }, { source: { $exists: false } }, { source: '' }] });
+
     if (search) {
       const searchEnabled = isEnabled(process.env.SEARCH);
       const allMatchingIds = new Set();
