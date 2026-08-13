@@ -160,6 +160,20 @@ export async function initializeCustom({
   };
 
   const modelOptions = { ...(model_parameters ?? {}), user: userId };
+
+  const bodyMessageId = req.body?.messageId as string | undefined;
+  const bodyResponseMessageId = req.body?.responseMessageId as string | undefined;
+  const derivedResponseMessageId = bodyResponseMessageId || (bodyMessageId ? `${bodyMessageId}_` : undefined);
+
+  if (endpoint === 'pi' && bodyMessageId && req.body) {
+    if (!req.body.overrideUserMessageId) {
+      req.body.overrideUserMessageId = `${bodyMessageId}__0`;
+    }
+    if (!req.body.responseMessageId && derivedResponseMessageId) {
+      req.body.responseMessageId = derivedResponseMessageId;
+    }
+  }
+
   const finalClientOptions = {
     modelOptions,
     ...clientOptions,
@@ -167,6 +181,8 @@ export async function initializeCustom({
       clientOptions.headers as Record<string, string>,
       req.body?.conversationId,
       getLangFromReq(req),
+      bodyMessageId,
+      derivedResponseMessageId,
     ),
   };
 

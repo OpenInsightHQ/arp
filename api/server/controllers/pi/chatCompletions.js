@@ -619,27 +619,40 @@ async function runNonStreamingPI({ finalUserMessage, agentId, sessionId, userId,
   }
 }
 
-async function streamFromPI({ res, chatId, created, finalUserMessage, agentId, sessionId, userId, streamStartTime, systemPrompt }) {
+async function streamFromPI({ res, chatId, created, finalUserMessage, agentId, sessionId, userId, streamStartTime, systemPrompt, userMessageId, responseMessageId }) {
   setSseHeaders(res);
   writeSseChunk(res, buildChunk(chatId, created, { role: 'assistant', content: '' }));
 
   const abortController = new AbortController();
   let clientDisconnected = false;
+  let heartbeatInterval = null;
+  let firstDataReceived = false;
+
+  heartbeatInterval = setInterval(() => {
+    if (clientDisconnected || firstDataReceived) {
+      if (heartbeatInterval) {
+        clearInterval(heartbeatInterval);
+        heartbeatInterval = null;
+      }
+      return;
+    }
+    if (!res.writableEnded) {
+      res.write(': heartbeat\n\n');
+      if (typeof res.flush === 'function') {
+        res.flush();
+      }
+    }
+  }, 2000);
 
   res.on('close', () => {
     if (!res.writableEnded) {
       clientDisconnected = true;
       abortController.abort();
-      console.log(`[PI Chat] Client disconnected, aborting PI request for session ${sessionId}`);
-      fetch(`${PI_HOST}/abort`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'api-key': PI_API_KEY,
-          'X-User-Id': userId,
-        },
-        body: JSON.stringify({ sessionId, agentId }),
-      }).catch(err => console.error('[PI Chat] Error calling /abort:', err.message));
+      if (heartbeatInterval) {
+        clearInterval(heartbeatInterval);
+        heartbeatInterval = null;
+      }
+      console.log(`[PI Chat] Client disconnected (stopping stream read), session ${sessionId}. PI generation continues for resume support.`);
     }
   });
 
@@ -658,6 +671,8 @@ async function streamFromPI({ res, chatId, created, finalUserMessage, agentId, s
         cwd: null,
         stream: true,
         systemPrompt,
+        userMessageId,
+        responseMessageId,
       }),
       signal: abortController.signal,
     });
@@ -681,6 +696,13 @@ async function streamFromPI({ res, chatId, created, finalUserMessage, agentId, s
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
+      if (!firstDataReceived) {
+        firstDataReceived = true;
+        if (heartbeatInterval) {
+          clearInterval(heartbeatInterval);
+          heartbeatInterval = null;
+        }
+      }
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
       buffer = lines.pop() || '';
@@ -773,6 +795,10 @@ async function streamFromPI({ res, chatId, created, finalUserMessage, agentId, s
     res.write('data: [DONE]\n\n');
     res.end();
   } catch (error) {
+    if (heartbeatInterval) {
+      clearInterval(heartbeatInterval);
+      heartbeatInterval = null;
+    }
     console.error('[PI Chat] Stream error:', error.message);
     writeSseChunk(res, buildChunk(chatId, created, { content: '\nStream error: ' + error.message }));
     res.write('data: [DONE]\n\n');
@@ -811,6 +837,8 @@ const piChatCompletionsController = async (req, res) => {
   const agentId = encodeEphemeralAgentId({ endpoint: 'pi', model, sender });
   const conversationId = req.headers['x-conversation-id'] || '';
   const sessionId = conversationId || 'new';
+  const userMessageId = req.headers['x-user-message-id'] || undefined;
+  const responseMessageId = req.headers['x-response-message-id'] || undefined;
 
   const solidHandled = await handleSolidificationRequest({
     userMessage,
@@ -853,6 +881,8 @@ const piChatCompletionsController = async (req, res) => {
     userId,
     streamStartTime,
     systemPrompt,
+    userMessageId,
+    responseMessageId,
   });
 };
 
