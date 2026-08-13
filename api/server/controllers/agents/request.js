@@ -130,11 +130,6 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
         return;
       }
 
-      if (isPIEndpoint) {
-        logger.debug('[ResumableAgentController] Skipping partial response save for PI endpoint');
-        return;
-      }
-
       const resumeState = await GenerationJobManager.getResumeState(streamId);
       if (!resumeState?.userMessage) {
         logger.debug('[ResumableAgentController] No user message to save partial response for');
