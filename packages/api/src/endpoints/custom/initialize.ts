@@ -165,6 +165,15 @@ export async function initializeCustom({
   const bodyResponseMessageId = req.body?.responseMessageId as string | undefined;
   const derivedResponseMessageId = bodyResponseMessageId || (bodyMessageId ? `${bodyMessageId}_` : undefined);
 
+  if (endpoint === 'pi' && bodyMessageId && req.body) {
+    if (!req.body.overrideUserMessageId) {
+      req.body.overrideUserMessageId = `${bodyMessageId}__0`;
+    }
+    if (!req.body.responseMessageId && derivedResponseMessageId) {
+      req.body.responseMessageId = derivedResponseMessageId;
+    }
+  }
+
   const finalClientOptions = {
     modelOptions,
     ...clientOptions,
