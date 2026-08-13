@@ -68,8 +68,19 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
   } = req.body;
 
   const userId = req.user.id;
-  // PI endpoint: messages are recorded by the PI backend, skip local saves.
   const isPIEndpoint = String(endpointOption?.endpoint) === 'pi';
+
+  let responseMessageId = editedResponseMessageId;
+  if (isPIEndpoint && !responseMessageId) {
+    const bodyMessageId = req.body.messageId;
+    if (bodyMessageId) {
+      responseMessageId = `${bodyMessageId}_`;
+      req.body.responseMessageId = responseMessageId;
+      if (!req.body.overrideUserMessageId) {
+        req.body.overrideUserMessageId = `${bodyMessageId}__0`;
+      }
+    }
+  }
 
   const { allowed, pendingRequests, limit } = await checkAndIncrementPendingRequest(userId);
   if (!allowed) {
@@ -260,7 +271,7 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
           overrideParentMessageId,
           isEdited: !!editedContent,
           userMCPAuthMap: result.userMCPAuthMap,
-          responseMessageId: editedResponseMessageId,
+          responseMessageId: responseMessageId,
           progressOptions: {
             res: {
               write: () => true,
