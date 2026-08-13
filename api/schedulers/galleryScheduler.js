@@ -16,8 +16,7 @@ require('dotenv').config();
 const path = require('path');
 require('module-alias')({ base: path.resolve(__dirname, '..') });
 const mongoose = require('mongoose');
-const { encodeEphemeralAgentId } = require('librechat-data-provider');
-const { getPiSystemPrompt, initializeSystemPromptService } = require('@librechat/api');
+const { initializeSystemPromptService } = require('@librechat/api');
 const { logger } = require('@librechat/data-schemas');
 
 // 导入模型
@@ -33,8 +32,6 @@ const { getGalleryVersionProvenance } = require('../server/utils/galleryArtifact
 const SCAN_INTERVAL_MS = 60 * 1000; // 每分钟扫描一次
 const MONGODB_URI = process.env.MONGODB_URI || process.env.MONGO_URI;
 const MAX_CONSECUTIVE_FAILURES = 5; // 最大连续失败次数
-const PI_HOST = process.env.PI_HOST || process.env.PI_AGENT_URL || 'http://localhost:3000';
-const PI_API_KEY = process.env.PI_API_KEY || 'testkey';
 
 
 // DMP API 配置
@@ -44,7 +41,6 @@ const DMP_API_KEY = process.env.DMP_API_KEY;
 // YAML 配置加载
 const yaml = require('js-yaml');
 const fs = require('fs');
-const path = require('path');
 
 // 加载 librechat.yaml 配置
 let customEndpointsCache = null;
@@ -517,118 +513,6 @@ async function executeTask(schedule) {
 
     return { success: false, error: error.message, retryAt };
   }
-}
-
-function buildSkillTaskMessage(task) {
-  const params = task.parameters || {};
-  const entries = Object.entries(params).filter(([, value]) => value !== undefined && value !== null && String(value).trim() !== '');
-  if (entries.length === 0) {
-    return `/skill:${task.skillName}`;
-  }
-
-  const parameterText = entries.map(([key, value]) => `- ${key}: ${value}`).join('\n');
-  return `/skill:${task.skillName}\n\n本次任务参数：\n${parameterText}`;
-}
-
-async function collectPiFiles(agentId, sessionId, userId) {
-  const files = [];
-  const dirs = [''];
-  const visited = new Set();
-  try {
-    while (dirs.length > 0) {
-      const currentPath = dirs.shift();
-      const key = currentPath || '/';
-      if (visited.has(key)) continue;
-      visited.add(key);
-      let url = `${PI_HOST}/files?agentId=${encodeURIComponent(agentId)}&sessionId=${encodeURIComponent(sessionId)}`;
-      if (currentPath) {
-        url += `&path=${encodeURIComponent(currentPath)}`;
-      }
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: { 'api-key': PI_API_KEY, 'X-User-Id': String(userId) },
-      });
-      if (!response.ok) {
-        continue;
-      }
-      const data = await response.json();
-      for (const file of data.files || []) {
-        const relativePath = currentPath ? `${currentPath}/${file.name}` : file.name;
-        if (file.isDirectory) {
-          dirs.push(relativePath);
-          continue;
-        }
-        files.push({
-          name: file.name,
-          path: relativePath,
-          url: `/arp/api/pi/files/download?agentId=${encodeURIComponent(agentId)}&sessionId=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(relativePath)}`,
-          mimeType: file.mimeType || null,
-          size: file.size || null,
-        });
-      }
-    }
-    return files;
-  } catch (error) {
-    logger.warn('[GalleryScheduler] Failed to collect PI files', { error: error.message });
-    return [];
-  }
-}
-
-async function executePiSkillTask(task, runId) {
-  const sender = 'One Pi';
-  const agentId = encodeEphemeralAgentId({ endpoint: 'pi', model: 'one-pi', sender });
-  const sessionId = `skilltask_${task.taskId}_${runId}`;
-  const message = buildSkillTaskMessage(task);
-  const response = await fetch(`${PI_HOST}/prompt`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'api-key': PI_API_KEY,
-      'X-User-Id': String(task.userId),
-    },
-    body: JSON.stringify({
-      message,
-      agentId,
-      sessionId,
-      cwd: null,
-      stream: true,
-      systemPrompt: await getPiSystemPrompt(),
-    }),
-  });
-
-  if (!response.ok) {
-    throw new Error(await response.text());
-  }
-
-  let textOutput = '';
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() || '';
-
-    for (const line of lines) {
-      if (!line.startsWith('data: ')) {
-        continue;
-      }
-      try {
-        const data = JSON.parse(line.slice(6));
-        if (data.type === 'text_delta' && data.delta) {
-          textOutput += data.delta;
-        }
-      } catch (_) {
-        // skip malformed SSE line
-      }
-    }
-  }
-
-  const files = await collectPiFiles(agentId, sessionId, task.userId);
-  return { agentId, sessionId, message, textOutput, files };
 }
 
 /**
