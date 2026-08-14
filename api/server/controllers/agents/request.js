@@ -308,11 +308,11 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
 
         // Check abort state BEFORE calling completeJob (which triggers abort signal for cleanup)
         const wasAbortedBeforeComplete = job.abortController.signal.aborted;
-        const isNewConvo = !reqConversationId || reqConversationId === 'new';
         const shouldGenerateTitle =
           addTitle &&
           parentMessageId === Constants.NO_PARENT &&
-          isNewConvo &&
+          !isRegenerate &&
+          !editedContent &&
           !wasAbortedBeforeComplete;
 
         // Save user message BEFORE sending final event to avoid race condition
@@ -766,7 +766,7 @@ const _LegacyAgentController = async (req, res, next, initializeClient, addTitle
     }
 
     // Add title if needed - extract minimal data
-    if (addTitle && parentMessageId === Constants.NO_PARENT && isNewConvo) {
+    if (addTitle && parentMessageId === Constants.NO_PARENT && !isRegenerate && !editedContent) {
       addTitle(req, {
         text,
         response: { ...response },
