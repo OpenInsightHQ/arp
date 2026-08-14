@@ -1,3 +1,5 @@
+require('dns').setDefaultResultOrder('ipv4first');
+require('net').setDefaultAutoSelectFamily(false);
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
