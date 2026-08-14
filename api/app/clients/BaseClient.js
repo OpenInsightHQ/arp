@@ -952,10 +952,6 @@ class BaseClient {
       throw new Error('User mismatch.');
     }
 
-    // PI endpoint: messages are recorded by the PI backend, so skip saving to
-    // the local messages table. The conversation record is still saved below.
-    const skipMessage = String(this.options?.endpoint) === 'pi';
-
     const hasAddedConvo = this.options?.req?.body?.addedConvo != null;
     // Attach the captured raw stream log to assistant messages when stream logging
     // is enabled. Only populated for the response message; user messages stay undefined.
@@ -963,21 +959,18 @@ class BaseClient {
       isStreamLogEnabled() && this.streamLogCollector && !message?.isCreatedByUser
         ? this.streamLogCollector.getLog()
         : undefined;
-    let savedMessage;
-    if (!skipMessage) {
-      savedMessage = await saveMessage(
-        this.options?.req,
-        {
-          ...message,
-          endpoint: this.options.endpoint,
-          unfinished: false,
-          user,
-          ...(hasAddedConvo && { addedConvo: true }),
-          ...(streamLog !== undefined && { streamLog }),
-        },
-        { context: 'api/app/clients/BaseClient.js - saveMessageToDatabase #saveMessage' },
-      );
-    }
+    const savedMessage = await saveMessage(
+      this.options?.req,
+      {
+        ...message,
+        endpoint: this.options.endpoint,
+        unfinished: false,
+        user,
+        ...(hasAddedConvo && { addedConvo: true }),
+        ...(streamLog !== undefined && { streamLog }),
+      },
+      { context: 'api/app/clients/BaseClient.js - saveMessageToDatabase #saveMessage' },
+    );
 
     if (this.skipSaveConvo) {
       return { message: savedMessage };
@@ -1034,11 +1027,6 @@ class BaseClient {
    * @param {Partial<TMessage>} message
    */
   async updateMessageInDatabase(message) {
-    // PI endpoint: messages are not saved locally (recorded by PI backend),
-    // so skip updates that would fail with "Message not found".
-    if (String(this.options?.endpoint) === 'pi') {
-      return;
-    }
     await updateMessage(this.options.req, message);
   }
 
