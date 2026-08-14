@@ -3,18 +3,15 @@ services:
     image: ghcr.nju.edu.cn/danny-avila/librechat-dev:latest
     volumes:
       - .:/app
-      # - type: bind
-      #   source: ./overrides/agents/dist/esm/tools/CodeExecutor.mjs
-      #   target: /app/node_modules/@librechat/agents/dist/esm/tools/CodeExecutor.mjs
-      #   read_only: true
-      # - type: bind
-      #   source: ./overrides/agents/dist/cjs/tools/CodeExecutor.cjs
-      #   target: /app/node_modules/@librechat/agents/dist/cjs/tools/CodeExecutor.cjs
-      #   read_only: true
-      # - type: bind
-      #   source: ./overrides/agents/src/tools/CodeExecutor.ts
-      #   target: /app/node_modules/@librechat/agents/src/tools/CodeExecutor.ts
-      #   read_only: true
+    networks:
+      - librechat_default
+
+  gallery-scheduler:
+    image: ghcr.nju.edu.cn/danny-avila/librechat-dev:latest
+    command: ["node", "api/schedulers/galleryScheduler.js"]
+    restart: always
+    volumes:
+      - .:/app
     networks:
       - librechat_default
 
