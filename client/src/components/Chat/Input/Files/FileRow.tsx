@@ -141,6 +141,8 @@ export default function FileRow({
               deleteFile({ file, setFiles });
             };
             const isImage = file.type?.startsWith('image') ?? false;
+            const useUploadedUrl = file.endpoint !== 'pi' && file.progress === 1;
+            const imageUrl = useUploadedUrl ? file.filepath : (file.preview ?? file.filepath);
 
             return (
               <div
@@ -153,7 +155,7 @@ export default function FileRow({
               >
                 {isImage ? (
                   <Image
-                    url={file.progress === 1 ? file.filepath : (file.preview ?? file.filepath)}
+                    url={imageUrl}
                     onDelete={handleDelete}
                     progress={file.progress}
                     source={file.source}
