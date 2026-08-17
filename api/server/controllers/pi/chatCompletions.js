@@ -751,13 +751,15 @@ async function streamFromPI({ res, chatId, created, finalUserMessage, agentId, s
             // Live subagent progress: pi forwards subagent thinking/text/tool
             // deltas via tool_update events. Stream them into reasoning_content
             // so the UI shows subagent activity while the tool is still running.
+            // Text is forwarded as-is (no added newline) so content deltas from
+            // pi concatenate into a continuous paragraph.
             const partial = data.partialResult;
             const text = partial?.content?.[0]?.text;
             if (typeof text === 'string' && text.length > 0) {
               writeSseChunk(
                 res,
                 buildChunk(chatId, created, {
-                  reasoning_content: `${text}\n`,
+                  reasoning_content: text,
                 }),
               );
             }
