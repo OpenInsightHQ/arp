@@ -201,7 +201,7 @@ router.post('/', requireTaskQueueAuth, async (req, res) => {
       return res.status(400).json({ error: 'title is required' });
     }
 
-    const validTypes = ['ai_pending', 'collaboration', 'manual'];
+    const validTypes = ['ai_pending', 'collaboration', 'manual', 'subagent'];
     if (!validTypes.includes(type)) {
       return res.status(400).json({ error: `type must be one of: ${validTypes.join(', ')}` });
     }

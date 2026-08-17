@@ -49,8 +49,23 @@ export default function ConversationTaskList({ conversationId }: ConversationTas
 
   if (loading || tasks.length === 0) return null;
 
-  const interactiveTasks = tasks.filter((t) => INTERACTIVE_STATUSES.includes(t.status));
-  const otherTasks = tasks.filter((t) => !INTERACTIVE_STATUSES.includes(t.status));
+  // type='subagent' tasks are AI-execution subtasks: never show a response
+  // form. Pending ones (created, not yet dispatched) still belong in the
+  // execution section so the user sees the decomposition plan.
+  const isAiExecution = (t: TaskQueueItem) => t.type === 'subagent';
+  const interactiveTasks = tasks.filter(
+    (t) => INTERACTIVE_STATUSES.includes(t.status) && !isAiExecution(t),
+  );
+  const runningTasks = tasks.filter(
+    (t) =>
+      t.status === 'running' ||
+      t.status === 'in_progress' ||
+      (isAiExecution(t) && t.status === 'pending') ||
+      (isAiExecution(t) && t.status === 'waiting_agent'),
+  );
+  const otherTasks = tasks.filter(
+    (t) => !interactiveTasks.includes(t) && !runningTasks.includes(t),
+  );
 
   return (
     <div
@@ -75,6 +90,9 @@ export default function ConversationTaskList({ conversationId }: ConversationTas
 
       {expanded && (
         <div className="space-y-2 px-4 pb-3">
+          {runningTasks.map((task) => (
+            <TaskCard key={task._id} task={task} onSubmitted={fetchTasks} running />
+          ))}
           {interactiveTasks.map((task) => (
             <TaskCard key={task._id} task={task} onSubmitted={fetchTasks} interactive />
           ))}
@@ -95,10 +113,12 @@ function TaskCard({
   task,
   onSubmitted,
   interactive = false,
+  running = false,
 }: {
   task: TaskQueueItem;
   onSubmitted: () => void;
   interactive?: boolean;
+  running?: boolean;
 }) {
   const config = statusConfig[task.status] ?? statusConfig.pending;
 
@@ -108,7 +128,9 @@ function TaskCard({
         'rounded-lg border p-3',
         interactive
           ? 'border-amber-300/50 bg-amber-50/30 dark:border-amber-500/20 dark:bg-amber-500/5'
-          : 'border-border-light bg-surface-primary',
+          : running
+            ? 'border-blue-300/50 bg-blue-50/30 dark:border-blue-500/20 dark:bg-blue-500/5'
+            : 'border-border-light bg-surface-primary',
       )}
     >
       <div className="flex items-start gap-2">

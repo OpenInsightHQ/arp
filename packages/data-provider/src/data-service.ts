@@ -1392,7 +1392,7 @@ export type TaskQueueItem = {
   sourceConversationId?: string;
   sourceSessionId?: string;
   sourceTurnSeq?: number;
-  type: 'ai_pending' | 'collaboration' | 'manual';
+  type: 'ai_pending' | 'collaboration' | 'manual' | 'subagent';
   title: string;
   description?: string;
   status: 'pending' | 'accepted' | 'in_progress' | 'waiting_agent' | 'running' | 'completed' | 'rejected' | 'dismissed' | 'failed' | 'aborted';

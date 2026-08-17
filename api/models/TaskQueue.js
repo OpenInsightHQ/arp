@@ -42,7 +42,7 @@ const TaskQueueSchema = new mongoose.Schema(
     // === 任务内容 ===
     type: {
       type: String,
-      enum: ['ai_pending', 'collaboration', 'manual'],
+      enum: ['ai_pending', 'collaboration', 'manual', 'subagent'],
       default: 'ai_pending',
       required: true,
     },
