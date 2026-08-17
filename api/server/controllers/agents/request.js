@@ -308,16 +308,16 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
 
         // Check abort state BEFORE calling completeJob (which triggers abort signal for cleanup)
         const wasAbortedBeforeComplete = job.abortController.signal.aborted;
-        const isNewConvo = !reqConversationId || reqConversationId === 'new';
         const shouldGenerateTitle =
           addTitle &&
           parentMessageId === Constants.NO_PARENT &&
-          isNewConvo &&
+          !isRegenerate &&
+          !editedContent &&
           !wasAbortedBeforeComplete;
 
         // Save user message BEFORE sending final event to avoid race condition
         // where client refetch happens before database is updated
-        if (!isPIEndpoint && !client.skipSaveUserMessage && userMessage) {
+        if (!client.skipSaveUserMessage && userMessage) {
           await saveMessage(req, userMessage, {
             context: 'api/server/controllers/agents/request.js - resumable user message',
           });
@@ -326,7 +326,7 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
         // CRITICAL: Save response message BEFORE emitting final event.
         // This prevents race conditions where the client sends a follow-up message
         // before the response is saved to the database, causing orphaned parentMessageIds.
-        if (!isPIEndpoint && client.savedMessageIds && !client.savedMessageIds.has(messageId)) {
+        if (client.savedMessageIds && !client.savedMessageIds.has(messageId)) {
           await saveMessage(
             req,
             {
@@ -728,7 +728,7 @@ const _LegacyAgentController = async (req, res, next, initializeClient, addTitle
       res.end();
 
       // Save the message if needed
-      if (!isPIEndpoint && client.savedMessageIds && !client.savedMessageIds.has(messageId)) {
+      if (client.savedMessageIds && !client.savedMessageIds.has(messageId)) {
         await saveMessage(
           req,
           { ...finalResponse, user: userId, streamLog: readStreamLog(client) },
@@ -759,14 +759,14 @@ const _LegacyAgentController = async (req, res, next, initializeClient, addTitle
     }
 
     // Save user message if needed
-    if (!isPIEndpoint && !client.skipSaveUserMessage) {
+    if (!client.skipSaveUserMessage) {
       await saveMessage(req, userMessage, {
         context: "api/server/controllers/agents/request.js - don't skip saving user message",
       });
     }
 
     // Add title if needed - extract minimal data
-    if (addTitle && parentMessageId === Constants.NO_PARENT && isNewConvo) {
+    if (addTitle && parentMessageId === Constants.NO_PARENT && !isRegenerate && !editedContent) {
       addTitle(req, {
         text,
         response: { ...response },

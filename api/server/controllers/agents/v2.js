@@ -35,6 +35,7 @@ const {
   extractToolCallIds,
   extractCacheTokens,
   applyCollectedUsageToContentParts,
+  createTokenCounter,
 } = require('@librechat/api');
 const { loadAgentTools, loadToolsForExecution } = require('~/server/services/ToolService');
 const { createToolEndCallback } = require('~/server/controllers/agents/callbacks');
@@ -690,6 +691,7 @@ const V2ChatCompletionController = async (req, res) => {
         conversationId,
       },
       user: { id: userSn },
+      tokenCounter: createTokenCounter('o200k_base'),
     });
 
     if (!run) {

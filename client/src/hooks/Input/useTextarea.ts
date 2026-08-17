@@ -7,6 +7,7 @@ import type { KeyboardEvent } from 'react';
 import {
   Constants,
   QueryKeys,
+  inferMimeType,
   isEphemeralAgentId,
   encodeEphemeralAgentId,
   uploadFileSimple,
@@ -54,8 +55,16 @@ export default function useTextarea({
   const queryClient = useQueryClient();
   const setConversationState = useSetRecoilState(store.conversationByIndex(0));
 
-  const { index, conversation, isSubmitting, filesLoading, latestMessage, setFilesLoading, setFiles, files: existingFiles } =
-    useChatContext();
+  const {
+    index,
+    conversation,
+    isSubmitting,
+    filesLoading,
+    latestMessage,
+    setFilesLoading,
+    setFiles,
+    files: existingFiles,
+  } = useChatContext();
   const [activePrompt, setActivePrompt] = useRecoilState(store.activePromptByIndex(index));
 
   const { endpoint = '' } = conversation || {};
@@ -286,7 +295,7 @@ export default function useTextarea({
             const baseFile = {
               file_id,
               file: originalFile,
-              type: originalFile.type,
+              type: inferMimeType(originalFile.name, originalFile.type),
               preview,
               progress: 0.5,
               size: originalFile.size,
@@ -303,9 +312,7 @@ export default function useTextarea({
             try {
               const res = await uploadFileSimple(piFilesAgentId, sid, originalFile);
               const basePath = (res.path ?? '').replace(/\/+$/, '');
-              const fullPath = basePath
-                ? `${basePath}/${originalFile.name}`
-                : originalFile.name;
+              const fullPath = basePath ? `${basePath}/${originalFile.name}` : originalFile.name;
               setFiles((prev: Map<string, any>) => {
                 const next = new Map(prev);
                 next.set(file_id, {
@@ -331,7 +338,17 @@ export default function useTextarea({
         }
       }
     },
-    [handleFiles, setFilesLoading, setFiles, textAreaRef, endpoint, conversation, piFilesAgentId, setConversationState, existingFiles],
+    [
+      handleFiles,
+      setFilesLoading,
+      setFiles,
+      textAreaRef,
+      endpoint,
+      conversation,
+      piFilesAgentId,
+      setConversationState,
+      existingFiles,
+    ],
   );
 
   return {

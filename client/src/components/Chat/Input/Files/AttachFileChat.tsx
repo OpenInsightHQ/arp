@@ -6,6 +6,7 @@ import {
   supportsFiles,
   EModelEndpoint,
   mergeFileConfig,
+  inferMimeType,
   isAgentsEndpoint,
   getEndpointField,
   isAssistantsEndpoint,
@@ -13,7 +14,6 @@ import {
   isEphemeralAgentId,
   encodeEphemeralAgentId,
   QueryKeys,
-  Tools,
   uploadFileSimple,
   type TEndpointsConfig,
 } from 'librechat-data-provider';
@@ -23,10 +23,8 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useAgentsMapContext, useChatContext } from '~/Providers';
 import { FolderOpen } from 'lucide-react';
 import { AttachmentIcon, TooltipAnchor } from '@librechat/client';
-import { Button } from '@librechat/client';
-import { useRecoilValue, useSetRecoilState } from 'recoil';
+import { useSetRecoilState } from 'recoil';
 import store from '~/store';
-import { ephemeralAgentByConvoId } from '~/store';
 import AttachFileMenu from './AttachFileMenu';
 import AttachFile from './AttachFile';
 import MyFilesDialogContent from '../CodeInterpreter/MyFilesDialog';
@@ -122,7 +120,6 @@ function AttachFileChat({
   );
 
   const setConversationState = useSetRecoilState(store.conversationByIndex(0));
-  const ephemeralAgent = useRecoilValue(ephemeralAgentByConvoId(conversationId));
 
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
 
@@ -154,68 +151,70 @@ function AttachFileChat({
 
   const { files: _files, setFiles } = useChatContext();
 
-  const agent = agentData || agentsMap?.[conversation?.agent_id ?? ''];
   const isPIEndpoint = (endpoint as string) === 'pi';
   const [piUploading, setPiUploading] = useState(false);
   const piFileInputRef = useRef<HTMLInputElement>(null);
 
-  const handlePiFileUpload = useCallback(async (file: File) => {
-    if (!file || !conversation) return;
-    setPiUploading(true);
-    const preview = URL.createObjectURL(file);
-    const file_id = v4();
-    let sid = conversation.conversationId;
-    if (!sid || sid === Constants.NEW_CONVO || sid === Constants.PENDING_CONVO) {
-      const newId = v4();
-      setConversationState({ ...conversation, conversationId: newId });
-      sid = newId;
-    }
-    const baseFile = {
-      file_id,
-      file,
-      type: file.type,
-      preview,
-      progress: 0.5,
-      size: file.size,
-      filename: file.name,
-      endpoint: 'pi' as const,
-      pi_session_id: sid,
-      pi_agent_id: piFilesAgentId,
-    };
-    setFiles((prev: Map<string, any>) => {
-      const next = new Map(prev);
-      next.set(file_id, baseFile);
-      return next;
-    });
-    uploadFileSimple(piFilesAgentId, sid, file)
-      .then((res) => {
-        const basePath = (res.path ?? '').replace(/\/+$/, '');
-        const fullPath = basePath ? `${basePath}/${file.name}` : file.name;
-        setFiles((prev: Map<string, any>) => {
-          const next = new Map(prev);
-          next.set(file_id, {
-            ...baseFile,
-            progress: 1,
-            filepath: fullPath,
-          });
-          return next;
-        });
-      })
-      .catch((err) => {
-        console.error('PI file upload failed:', err);
-        setFiles((prev: Map<string, any>) => {
-          const next = new Map(prev);
-          next.delete(file_id);
-          return next;
-        });
-      })
-      .finally(() => {
-        setPiUploading(false);
-        if (piFileInputRef.current) {
-          piFileInputRef.current.value = '';
-        }
+  const handlePiFileUpload = useCallback(
+    async (file: File) => {
+      if (!file || !conversation) return;
+      setPiUploading(true);
+      const preview = URL.createObjectURL(file);
+      const file_id = v4();
+      let sid = conversation.conversationId;
+      if (!sid || sid === Constants.NEW_CONVO || sid === Constants.PENDING_CONVO) {
+        const newId = v4();
+        setConversationState({ ...conversation, conversationId: newId });
+        sid = newId;
+      }
+      const baseFile = {
+        file_id,
+        file,
+        type: inferMimeType(file.name, file.type),
+        preview,
+        progress: 0.5,
+        size: file.size,
+        filename: file.name,
+        endpoint: 'pi' as const,
+        pi_session_id: sid,
+        pi_agent_id: piFilesAgentId,
+      };
+      setFiles((prev: Map<string, any>) => {
+        const next = new Map(prev);
+        next.set(file_id, baseFile);
+        return next;
       });
-  }, [conversation, piFilesAgentId, setConversationState, setFiles]);
+      uploadFileSimple(piFilesAgentId, sid, file)
+        .then((res) => {
+          const basePath = (res.path ?? '').replace(/\/+$/, '');
+          const fullPath = basePath ? `${basePath}/${file.name}` : file.name;
+          setFiles((prev: Map<string, any>) => {
+            const next = new Map(prev);
+            next.set(file_id, {
+              ...baseFile,
+              progress: 1,
+              filepath: fullPath,
+            });
+            return next;
+          });
+        })
+        .catch((err) => {
+          console.error('PI file upload failed:', err);
+          setFiles((prev: Map<string, any>) => {
+            const next = new Map(prev);
+            next.delete(file_id);
+            return next;
+          });
+        })
+        .finally(() => {
+          setPiUploading(false);
+          if (piFileInputRef.current) {
+            piFileInputRef.current.value = '';
+          }
+        });
+    },
+    [conversation, piFilesAgentId, setConversationState, setFiles],
+  );
 
   if (isPIEndpoint) {
     return (
@@ -254,7 +253,12 @@ function AttachFileChat({
             </button>
           }
         />
-        <button type="button" onClick={handleOpenMyFiles} title="我的文件" className="flex size-9 items-center justify-center rounded-full p-1 transition-colors hover:bg-surface-hover">
+        <button
+          type="button"
+          onClick={handleOpenMyFiles}
+          title="我的文件"
+          className="flex size-9 items-center justify-center rounded-full p-1 transition-colors hover:bg-surface-hover"
+        >
           <FolderOpen className="h-5 w-5" />
         </button>
         {activeSessionId && (
