@@ -897,7 +897,15 @@ class BaseClient {
   async loadHistory(conversationId, parentMessageId = null) {
     logger.debug('[BaseClient] Loading history:', { conversationId, parentMessageId });
 
-    const messages = (await getMessages({ conversationId })) ?? [];
+    const messages =
+      (await getMessages({
+        conversationId,
+        // Exclude subagent trace docs: they share the conversationId but are
+        // isolated execution records (parentMessageId = NO_PARENT, never on
+        // the chat thread). Excluded here so they are never loaded into
+        // memory or sent to the model, even defensively.
+        'metadata.isSubagentTrace': { $ne: true },
+      })) ?? [];
 
     if (messages.length === 0) {
       return [];
