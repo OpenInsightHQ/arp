@@ -48,7 +48,13 @@ router.get('/', async (req, res) => {
       }).lean();
       response = { messages: message ? [message] : [], nextCursor: null };
     } else if (conversationId) {
-      const filter = { conversationId, user: user };
+      const filter = {
+        conversationId,
+        user: user,
+        // Exclude subagent trace messages (they share the conversationId but
+        // belong to isolated subagent executions, not the visible chat tree)
+        'metadata.isSubagentTrace': { $ne: true },
+      };
       if (cursor) {
         filter[sortField] = sortOrder === 1 ? { $gt: cursor } : { $lt: cursor };
       }
@@ -284,7 +290,13 @@ router.post('/artifact/:messageId', async (req, res) => {
 router.get('/:conversationId', validateMessageReq, async (req, res) => {
   try {
     const { conversationId } = req.params;
-    const messages = await getMessages({ conversationId }, '-_id -__v -user');
+    const messages = await getMessages(
+      {
+        conversationId,
+        'metadata.isSubagentTrace': { $ne: true },
+      },
+      '-_id -__v -user',
+    );
     res.status(200).json(messages);
   } catch (error) {
     logger.error('Error fetching messages:', error);

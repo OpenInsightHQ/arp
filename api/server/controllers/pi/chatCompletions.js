@@ -747,6 +747,23 @@ async function streamFromPI({ res, chatId, created, finalUserMessage, agentId, s
             continue;
           }
 
+          if (currentEvent === 'tool_update') {
+            // Live subagent progress: pi forwards subagent thinking/text/tool
+            // deltas via tool_update events. Stream them into reasoning_content
+            // so the UI shows subagent activity while the tool is still running.
+            const partial = data.partialResult;
+            const text = partial?.content?.[0]?.text;
+            if (typeof text === 'string' && text.length > 0) {
+              writeSseChunk(
+                res,
+                buildChunk(chatId, created, {
+                  reasoning_content: `${text}\n`,
+                }),
+              );
+            }
+            continue;
+          }
+
           if (currentEvent === 'tool_end') {
             const toolName = data.toolName || 'unknown';
             writeSseChunk(res, buildChunk(chatId, created, { reasoning_content: `✅ ${toolName} 完成\n` }));
