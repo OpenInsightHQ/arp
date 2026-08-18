@@ -1402,7 +1402,7 @@ export type TaskQueueItem = {
   userResponse?: string;
   callbackUrl?: string;
   formType?: 'free_text' | 'choice' | 'form' | 'confirmation';
-  choices?: { label: string; value: string; description?: string }[];
+  choices?: { label: string; value: string; description?: string; isCancel?: boolean }[];
   fields?: TaskFormField[];
   formResponse?: Record<string, unknown>;
   subagentTaskId?: string;

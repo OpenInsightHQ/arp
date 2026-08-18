@@ -68,7 +68,9 @@ export default function TaskForm({ task, onSubmitted }: TaskFormProps) {
             key={choice.value}
             className={cn(
               'block w-full rounded-md border px-3 py-2 text-left text-xs transition-colors',
-              'border-border-medium hover:border-border-xheavy hover:bg-surface-tertiary',
+              choice.isCancel
+                ? 'border-red-300/60 text-red-600 hover:bg-red-50 dark:border-red-500/30 dark:text-red-400 dark:hover:bg-red-500/10'
+                : 'border-border-medium hover:border-border-xheavy hover:bg-surface-tertiary',
               submitting && 'cursor-not-allowed opacity-50',
             )}
             disabled={submitting}

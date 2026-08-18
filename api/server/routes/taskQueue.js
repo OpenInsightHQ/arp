@@ -553,16 +553,37 @@ router.post('/:taskId/submit', requireTaskQueueAuth, async (req, res) => {
 
     task.formResponse = formResponse || {};
     task.userResponse = typeof formResponse === 'string' ? formResponse : JSON.stringify(formResponse);
-    task.status = 'waiting_agent';
+
+    // 语义化终态：取消类响应直接落终态，不进入 waiting_agent
+    // - confirmation 拒绝（confirmed === false）→ rejected
+    // - choice 选中标记 isCancel 的选项（如"取消"）→ rejected
+    // 其余响应 → waiting_agent，由 pi 下一轮 prompt 接管（注入后 running → completed）
+    let nextStatus = 'waiting_agent';
+    if (task.formType === 'confirmation' && formResponse?.confirmed === false) {
+      nextStatus = 'rejected';
+    } else if (task.formType === 'choice' && typeof formResponse?.choice === 'string') {
+      const chosen = (task.choices || []).find(
+        (c) => c.value === formResponse.choice || c.label === formResponse.choice,
+      );
+      if (chosen?.isCancel) {
+        nextStatus = 'rejected';
+      }
+    }
+
+    task.status = nextStatus;
+    if (nextStatus === 'rejected') {
+      task.completedAt = new Date();
+    }
     await task.save();
 
     logger.info('[POST /api/task-queue/:taskId/submit] Task submitted', {
       taskId,
       userId,
       formType: task.formType,
+      nextStatus,
     });
 
-    return res.json({ taskId: task._id, status: 'waiting_agent' });
+    return res.json({ taskId: task._id, status: nextStatus });
   } catch (error) {
     logger.error('[POST /api/task-queue/:taskId/submit] Error:', error);
     return res.status(500).json({ error: error.message });

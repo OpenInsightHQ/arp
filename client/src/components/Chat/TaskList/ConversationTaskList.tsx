@@ -13,6 +13,7 @@ import { cn } from '~/utils';
 import {
   getTasksByConversation,
   clearCompletedTasks,
+  updateTaskQueueItem,
   type TaskQueueItem,
 } from 'librechat-data-provider';
 import TaskForm from './TaskForm';
@@ -77,15 +78,21 @@ export default function ConversationTaskList({ conversationId }: ConversationTas
 
   if (loading || tasks.length === 0) return null;
 
-  const interactiveTasks = tasks.filter((t) => INTERACTIVE_STATUSES.includes(t.status));
-  const runningTasks = tasks.filter(
-    (t) =>
-      t.status === 'running' ||
-      t.status === 'in_progress' ||
-      t.status === 'waiting_agent' ||
-      (t.type === 'subagent' && INTERACTIVE_STATUSES.includes(t.status)),
+  const interactiveTasks = tasks.filter(
+    (t) => INTERACTIVE_STATUSES.includes(t.status) && t.type !== 'subagent',
   );
-  const activeCount = interactiveTasks.length + runningTasks.length;
+  const runningTasks = tasks.filter(
+    (t) => t.status === 'running' || (t.status === 'in_progress' && t.type !== 'subagent'),
+  );
+  const subagentQueuedTasks = tasks.filter(
+    (t) =>
+      (t.type === 'subagent' && INTERACTIVE_STATUSES.includes(t.status)) ||
+      (t.type === 'subagent' && (t.status === 'running' || t.status === 'in_progress')),
+  );
+  // waiting_agent: user responded, waiting for the AI's next turn to consume.
+  // Displayed as queued (not spinning); dismissible in case the loop stalls.
+  const queuedTasks = tasks.filter((t) => t.status === 'waiting_agent' && t.type !== 'subagent');
+  const activeCount = interactiveTasks.length + runningTasks.length + queuedTasks.length;
   const finishedTasks = tasks.filter((t) => TERMINAL_STATUSES.includes(t.status));
   // newest finished first for the history view
   const finishedNewestFirst = [...finishedTasks].reverse();
@@ -112,6 +119,12 @@ export default function ConversationTaskList({ conversationId }: ConversationTas
         <div className="space-y-2 px-4 pb-3">
           {runningTasks.map((task) => (
             <TaskCard key={task._id} task={task} onSubmitted={fetchTasks} running />
+          ))}
+          {subagentQueuedTasks.map((task) => (
+            <TaskCard key={task._id} task={task} onSubmitted={fetchTasks} running />
+          ))}
+          {queuedTasks.map((task) => (
+            <TaskCard key={task._id} task={task} onSubmitted={fetchTasks} queued />
           ))}
           {interactiveTasks.map((task) => (
             <TaskCard key={task._id} task={task} onSubmitted={fetchTasks} interactive />
@@ -160,15 +173,30 @@ function TaskCard({
   onSubmitted,
   interactive = false,
   running = false,
+  queued = false,
   compact = false,
 }: {
   task: TaskQueueItem;
   onSubmitted: () => void;
   interactive?: boolean;
   running?: boolean;
+  queued?: boolean;
   compact?: boolean;
 }) {
   const config = statusConfig[task.status] ?? statusConfig.pending;
+  const [dismissing, setDismissing] = useState(false);
+
+  const handleDismiss = async () => {
+    setDismissing(true);
+    try {
+      await updateTaskQueueItem(task._id, { status: 'rejected' });
+      onSubmitted();
+    } catch {
+      /* leave as-is on failure */
+    } finally {
+      setDismissing(false);
+    }
+  };
 
   return (
     <div
@@ -177,9 +205,11 @@ function TaskCard({
         compact ? 'p-2 opacity-75' : 'p-3',
         interactive
           ? 'border-amber-300/50 bg-amber-50/30 dark:border-amber-500/20 dark:bg-amber-500/5'
-          : running
-            ? 'border-blue-300/50 bg-blue-50/30 dark:border-blue-500/20 dark:bg-blue-500/5'
-            : 'border-border-light bg-surface-primary',
+          : queued
+            ? 'border-purple-300/50 bg-purple-50/30 dark:border-purple-500/20 dark:bg-purple-500/5'
+            : running
+              ? 'border-blue-300/50 bg-blue-50/30 dark:border-blue-500/20 dark:bg-blue-500/5'
+              : 'border-border-light bg-surface-primary',
       )}
     >
       <div className="flex items-start gap-2">
@@ -191,6 +221,9 @@ function TaskCard({
               {task.description}
             </div>
           )}
+          {queued && (
+            <div className="mt-0.5 text-[10px] text-purple-500">已响应，等待 AI 下一轮处理</div>
+          )}
           {task.resultSummary && (task.status === 'completed' || task.status === 'failed') && (
             <div className="bg-surface-tertiary/50 mt-1 line-clamp-3 rounded p-1.5 text-xs text-text-secondary">
               {task.resultSummary}
@@ -201,6 +234,15 @@ function TaskCard({
             <div className="mt-1 text-[10px] text-text-tertiary">Subagent: {task.subagentName}</div>
           )}
         </div>
+        {queued && (
+          <button
+            className="ml-2 shrink-0 text-[11px] text-text-secondary hover:text-red-500"
+            disabled={dismissing}
+            onClick={handleDismiss}
+          >
+            {dismissing ? '...' : '取消'}
+          </button>
+        )}
       </div>
     </div>
   );
