@@ -76,23 +76,28 @@ export default function ConversationTaskList({ conversationId }: ConversationTas
     }
   }, [conversationId, fetchTasks]);
 
-  if (loading || tasks.length === 0) return null;
+  if (loading) return null;
 
-  const interactiveTasks = tasks.filter(
+  // Active = anything not in a terminal state. The panel only renders while
+  // there is live work in this conversation; once every task is finished
+  // (or there are none) it disappears. Finished history stays reachable
+  // via the global task center.
+  const activeTasks = tasks.filter((t) => !TERMINAL_STATUSES.includes(t.status));
+  if (activeTasks.length === 0) return null;
+
+  // Rendering groups within active tasks (mutually exclusive):
+  const interactiveTasks = activeTasks.filter(
     (t) => INTERACTIVE_STATUSES.includes(t.status) && t.type !== 'subagent',
   );
-  const runningTasks = tasks.filter(
-    (t) => t.status === 'running' || (t.status === 'in_progress' && t.type !== 'subagent'),
+  const queuedTasks = activeTasks.filter(
+    (t) => t.status === 'waiting_agent' && t.type !== 'subagent',
   );
-  const subagentQueuedTasks = tasks.filter(
-    (t) =>
-      (t.type === 'subagent' && INTERACTIVE_STATUSES.includes(t.status)) ||
-      (t.type === 'subagent' && (t.status === 'running' || t.status === 'in_progress')),
+  // Everything else active: running, in_progress, and subagent tasks queued
+  // for dispatch or executing.
+  const executionTasks = activeTasks.filter(
+    (t) => !interactiveTasks.includes(t) && !queuedTasks.includes(t),
   );
-  // waiting_agent: user responded, waiting for the AI's next turn to consume.
-  // Displayed as queued (not spinning); dismissible in case the loop stalls.
-  const queuedTasks = tasks.filter((t) => t.status === 'waiting_agent' && t.type !== 'subagent');
-  const activeCount = interactiveTasks.length + runningTasks.length + queuedTasks.length;
+
   const finishedTasks = tasks.filter((t) => TERMINAL_STATUSES.includes(t.status));
   // newest finished first for the history view
   const finishedNewestFirst = [...finishedTasks].reverse();
@@ -106,7 +111,7 @@ export default function ConversationTaskList({ conversationId }: ConversationTas
         {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronUp className="h-3 w-3" />}
         <span>Tasks</span>
         <span className="rounded-full bg-blue-500/20 px-1.5 py-0.5 text-[10px] font-bold text-blue-600">
-          {activeCount} active
+          {activeTasks.length} active
         </span>
         {finishedTasks.length > 0 && (
           <span className="rounded-full bg-surface-tertiary px-1.5 py-0.5 text-[10px] font-bold text-text-secondary">
@@ -117,10 +122,7 @@ export default function ConversationTaskList({ conversationId }: ConversationTas
 
       {expanded && (
         <div className="space-y-2 px-4 pb-3">
-          {runningTasks.map((task) => (
-            <TaskCard key={task._id} task={task} onSubmitted={fetchTasks} running />
-          ))}
-          {subagentQueuedTasks.map((task) => (
+          {executionTasks.map((task) => (
             <TaskCard key={task._id} task={task} onSubmitted={fetchTasks} running />
           ))}
           {queuedTasks.map((task) => (
