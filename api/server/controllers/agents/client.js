@@ -3,10 +3,9 @@ const { logger } = require('@librechat/data-schemas');
 const { getBufferString, HumanMessage, AIMessage } = require('@langchain/core/messages');
 const {
   summarizeOnRecursionLimit,
-  formatContentPartsForSummary,
-  formatChunksForSummary,
+  formatInProgressAgentOutputs,
+  EMPTY_AGENT_OUTPUTS_TEXT,
   generateSummaryPrompt,
-  buildFallbackSummary,
 } = require('./summary');
 const {
   FinishReason,
@@ -152,20 +151,19 @@ class AgentClient extends BaseClient {
   getContentParts() {
     return this.contentParts;
   }
-
   /**
-   * Formats contentParts into a plain-text execution record for fallback summary display.
-   * Delegates to the shared formatContentPartsForSummary utility.
-   * @param {MessageContentComplex[]} contentParts
-   * @returns {string|null} Formatted text or null if empty
+   * Formats the in-progress agent outputs (text + tool calls, no thinking, no
+   * truncation) captured as contentParts of the current run. Delegates to the
+   * shared formatInProgressAgentOutputs utility.
+   * @returns {string|null} Formatted text or null if no outputs yet
    */
-  formatContentPartsForSummary(contentParts) {
-    return formatContentPartsForSummary(contentParts);
+  formatCurrentAgentOutputs() {
+    return formatInProgressAgentOutputs(this.contentParts);
   }
-
   /**
-   * Calls the model to summarize the agent execution from contentParts.
-   * Delegates to the shared summarizeOnRecursionLimit utility for provider resolution & model call.
+   * Calls the model to summarize the agent execution from the last 7
+   * conversation messages. Delegates to the shared summarizeOnRecursionLimit
+   * utility for provider resolution & model call.
    * @param {AbortSignal} signal
    * @returns {Promise<string|null>} Summary text or null on failure
    */
@@ -222,31 +220,8 @@ class AgentClient extends BaseClient {
         .join('\n');
     }
 
-    // 3) Agent execution output
-    let agentOutputsText = this.formatContentPartsForSummary(this.contentParts);
-
-    if (
-      !agentOutputsText &&
-      Array.isArray(this.currentMessages) &&
-      this.currentMessages.length > 0
-    ) {
-      try {
-        const buffer = getBufferString(this.currentMessages);
-        if (typeof buffer === 'string' && buffer.trim().length > 0) {
-          agentOutputsText = `\u4F1A\u8BDD\u6D88\u606F\u6458\u8981\uFF1A\n${buffer.trim()}`;
-        }
-      } catch (bufferErr) {
-        logger.warn(
-          '[api/server/controllers/agents/client.js #summarizeExecutionWithModel] Failed to build buffer string from currentMessages',
-          bufferErr,
-        );
-      }
-    }
-
-    if (!agentOutputsText) {
-      agentOutputsText =
-        '\uFF08\u6682\u65E0\u53EF\u7528\u7684\u6267\u884C\u8F93\u51FA\u65E5\u5FD7\uFF0C\u53EF\u80FD\u5728\u8C03\u7528\u65E9\u671F\u6216\u4EC5\u4EA7\u751F\u4E86\u5185\u90E8\u9519\u8BEF\u4FE1\u606F\u3002\uFF09';
-    }
+    // 3) Agent execution output: in-progress run output only
+    const agentOutputsText = this.formatCurrentAgentOutputs() ?? EMPTY_AGENT_OUTPUTS_TEXT;
 
     const result = await summarizeOnRecursionLimit({
       run: this.run,
@@ -1327,25 +1302,7 @@ ${historyString}`;
               .join('\n');
           }
 
-          let partsSummary = this.formatContentPartsForSummary(this.contentParts);
-
-          if (
-            !partsSummary &&
-            Array.isArray(this.currentMessages) &&
-            this.currentMessages.length > 0
-          ) {
-            try {
-              const buffer = getBufferString(this.currentMessages);
-              if (typeof buffer === 'string' && buffer.trim().length > 0) {
-                partsSummary = `会话消息摘要：\n${buffer.trim()}`;
-              }
-            } catch (bufferErr) {
-              logger.warn(
-                '[api/server/controllers/agents/client.js #sendCompletion] Failed to build buffer string from currentMessages for recursion summary',
-                bufferErr,
-              );
-            }
-          }
+          const partsSummary = this.formatCurrentAgentOutputs();
 
           const sections = [];
 
@@ -1730,7 +1687,6 @@ ${historyString}`;
 
 module.exports = {
   AgentClient,
-  formatContentPartsForSummary,
-  formatChunksForSummary,
+  formatInProgressAgentOutputs,
   generateSummaryPrompt,
 };

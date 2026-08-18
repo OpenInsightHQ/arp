@@ -1,13 +1,6 @@
 const { logger } = require('@librechat/data-schemas');
-const {
-  Providers,
-  createMetadataAggregator,
-} = require('@librechat/agents');
-const {
-  ContentTypes,
-  EModelEndpoint,
-} = require('librechat-data-provider');
-const { getBufferString } = require('@langchain/core/messages');
+const { Providers, createMetadataAggregator } = require('@librechat/agents');
+const { ContentTypes, EModelEndpoint } = require('librechat-data-provider');
 const {
   omitTitleOptions,
   getProviderConfig,
@@ -24,58 +17,78 @@ function sanitizeForPromptTemplate(text) {
   return text.replace(/{/g, '\uFF5B').replace(/}/g, '\uFF5D');
 }
 
-function formatChunksForSummary(textChunks) {
-  const fullResponseText = textChunks.join('');
-  if (fullResponseText) {
-    return `已得到的执行输出：\n${fullResponseText}`;
+const EMPTY_AGENT_OUTPUTS_TEXT = '（暂无可用的执行输出日志）';
+
+function formatToolCallForAgentOutput(tc) {
+  const name = tc.name || 'unknown';
+  let argsStr = '';
+  if (typeof tc.args === 'string') {
+    argsStr = tc.args;
+  } else if (tc.args != null) {
+    argsStr = JSON.stringify(tc.args);
   }
-  return '（暂无可用的执行输出日志）';
+  let outputStr = '';
+  if (typeof tc.output === 'string') {
+    outputStr = tc.output;
+  } else if (tc.output && typeof tc.output === 'object') {
+    outputStr =
+      typeof tc.output.content === 'string' ? tc.output.content : JSON.stringify(tc.output);
+  }
+  return `[调用工具 ${name}]\n工具参数：${argsStr || '（无）'}\n工具结果：${outputStr || '（无输出）'}`;
 }
 
-function formatContentPartsForSummary(contentParts) {
-  if (!Array.isArray(contentParts) || contentParts.length === 0) {
-    return null;
+/**
+ * Extracts the plain text value of a content part's text field.
+ * @param {unknown} value
+ * @returns {string}
+ */
+function extractPartText(value) {
+  if (typeof value === 'string') {
+    return value;
   }
+  if (value && typeof value === 'object' && typeof value.value === 'string') {
+    return value.value;
+  }
+  return '';
+}
 
+/**
+ * Formats content parts (text + tool calls, thinking excluded, not truncated)
+ * into plain-text lines.
+ * @param {unknown} contentParts
+ * @returns {string[]}
+ */
+function formatContentPartsLines(contentParts) {
   const lines = [];
+  if (!Array.isArray(contentParts)) {
+    return lines;
+  }
   for (const part of contentParts) {
     if (!part || typeof part !== 'object') {
       continue;
     }
     if (part.type === ContentTypes.TEXT) {
-      const value = part[ContentTypes.TEXT];
-      let text = '';
-      if (typeof value === 'string') {
-        text = value;
-      } else if (value && typeof value === 'object' && typeof value.value === 'string') {
-        text = value.value;
-      }
+      const text = extractPartText(part[ContentTypes.TEXT]);
       if (text) {
         lines.push(text.trim());
       }
     } else if (part.type === ContentTypes.TOOL_CALL && part.tool_call) {
-      const tc = part.tool_call;
-      const name = tc.name || 'unknown';
-      let outputStr = '';
-      if (typeof tc.output === 'string') {
-        outputStr = tc.output;
-      } else if (tc.output && typeof tc.output === 'object') {
-        outputStr =
-          typeof tc.output.content === 'string'
-            ? tc.output.content
-            : JSON.stringify(tc.output);
-      }
-      lines.push(`[调用工具 ${name}] ${outputStr || '(无输出)'}`);
+      lines.push(formatToolCallForAgentOutput(part.tool_call));
     }
   }
+  return lines;
+}
 
-  if (lines.length === 0) {
-    return null;
-  }
-
-  const joined = lines.join('\n').trim();
-  const MAX_CHARS = 1500;
-  return joined.length > MAX_CHARS ? `${joined.slice(0, MAX_CHARS)}…` : joined;
+/**
+ * Formats the in-progress agent execution output captured as content parts of
+ * the current (unfinished) run: text, tool calls and their results. Thinking
+ * content is excluded and the result is not truncated.
+ * @param {unknown} contentParts - content parts captured from the current run
+ * @returns {string|null} Formatted text or null if no outputs yet
+ */
+function formatInProgressAgentOutputs(contentParts) {
+  const lines = formatContentPartsLines(contentParts);
+  return lines.length > 0 ? lines.join('\n') : null;
 }
 
 async function getSummaryTemplate() {
@@ -92,11 +105,28 @@ function fillSummaryTemplate(template, lastQuestion, lastMessagesText, agentOutp
     .replace(/\{agentOutputsText\}/g, agentOutputsText);
 }
 
-async function generateSummaryPrompt(lastQuestion, lastMessagesText, agentOutputsText) {
+/**
+ * Builds the agent system prompt section that is unconditionally prepended
+ * to the summary prompt, independent of any template placeholder.
+ * @param {string} agentInstructions - sanitized agent instructions
+ * @returns {string}
+ */
+function buildAgentInstructionsSection(agentInstructions) {
+  return `【智能体的系统提示词】\n${agentInstructions || '（无）'}`;
+}
+
+async function generateSummaryPrompt(
+  agentInstructions,
+  lastQuestion,
+  lastMessagesText,
+  agentOutputsText,
+) {
+  const instructionsSection = buildAgentInstructionsSection(agentInstructions);
   const template = await getSummaryTemplate();
 
   if (template) {
-    return fillSummaryTemplate(template, lastQuestion, lastMessagesText, agentOutputsText);
+    const filled = fillSummaryTemplate(template, lastQuestion, lastMessagesText, agentOutputsText);
+    return `${instructionsSection}\n\n${filled}`;
   }
 
   const fallbackTemplate =
@@ -111,7 +141,7 @@ async function generateSummaryPrompt(lastQuestion, lastMessagesText, agentOutput
     `4、禁止过渡解读，以事实数据为主，辅助数据解读，不要扮演业务专家的角色，你只是一个数据分析师。\n` +
     `5、仅总结，不要输出任何对话信息，直接输出结果。`;
 
-  return fallbackTemplate;
+  return `${instructionsSection}\n\n${fallbackTemplate}`;
 }
 
 function buildFallbackSummary({ inputContent, agentOutputsText }) {
@@ -121,9 +151,7 @@ function buildFallbackSummary({ inputContent, agentOutputsText }) {
 
   const sections = [];
   sections.push(agentOutputsText);
-  sections.push(
-    '\n以上是当前已获取的分析结果。如需继续深入分析，请再次提问。',
-  );
+  sections.push('\n以上是当前已获取的分析结果。如需继续深入分析，请再次提问。');
   return sections.join('\n').trim();
 }
 
@@ -247,20 +275,20 @@ async function summarizeOnRecursionLimit({
     });
   }
 
+  const sanitizedAgentInstructions = sanitizeForPromptTemplate(
+    typeof agent?.instructions === 'string' ? agent.instructions : '',
+  );
   const sanitizedUserQuestion = sanitizeForPromptTemplate(userQuestion);
   const sanitizedRecentMessages = sanitizeForPromptTemplate(recentMessagesText);
   agentOutputsText = sanitizeForPromptTemplate(agentOutputsText);
 
   const infoSections = [];
+  infoSections.push(`1）智能体的系统提示词：\n${sanitizedAgentInstructions || '（无）'}`);
+  infoSections.push(`2）用户最后一个问题：\n${sanitizedUserQuestion || '（未能获取）'}`);
   infoSections.push(
-    `1）用户最后一个问题：\n${sanitizedUserQuestion || '（未能获取）'}`,
+    `3）最近 7 条用户与系统/助手的对话消息（从旧到新）：\n${sanitizedRecentMessages || '（暂无）'}`,
   );
-  infoSections.push(
-    `2）最近 7 条用户与系统/助手的对话消息（从旧到新）：\n${sanitizedRecentMessages || '（暂无）'}`,
-  );
-  infoSections.push(
-    `3）每个智能体执行的输出结果：\n${agentOutputsText}`,
-  );
+  infoSections.push(`4）当前执行中的智能体的输出结果：\n${agentOutputsText}`);
   const inputContent = infoSections.join('\n\n').trim();
 
   const fallbackText = buildModelFallbackSummary({ inputContent, agentOutputsText });
@@ -271,7 +299,12 @@ async function summarizeOnRecursionLimit({
 
   const { handleLLMEnd, collected: collectedMetadata } = createMetadataAggregator();
 
-  const summaryTitlePrompt = await generateSummaryPrompt(sanitizedUserQuestion, sanitizedRecentMessages, agentOutputsText);
+  const summaryTitlePrompt = await generateSummaryPrompt(
+    sanitizedAgentInstructions,
+    sanitizedUserQuestion,
+    sanitizedRecentMessages,
+    agentOutputsText,
+  );
 
   let titleResult;
   try {
@@ -314,9 +347,9 @@ async function summarizeOnRecursionLimit({
 }
 
 module.exports = {
+  EMPTY_AGENT_OUTPUTS_TEXT,
   sanitizeForPromptTemplate,
-  formatChunksForSummary,
-  formatContentPartsForSummary,
+  formatInProgressAgentOutputs,
   generateSummaryPrompt,
   buildFallbackSummary,
   buildModelFallbackSummary,

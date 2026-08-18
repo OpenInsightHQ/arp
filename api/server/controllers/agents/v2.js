@@ -49,7 +49,8 @@ const { getConvoFiles, searchConversation } = require('~/models/Conversation');
 const { getAgent } = require('~/models/Agent');
 const {
   summarizeOnRecursionLimit,
-  formatChunksForSummary,
+  formatInProgressAgentOutputs,
+  EMPTY_AGENT_OUTPUTS_TEXT,
   buildFallbackSummary,
 } = require('./summary');
 const {
@@ -307,8 +308,6 @@ const V2ChatCompletionController = async (req, res) => {
       'model_not_found',
     );
   }
-
-
 
   // ===== Normal Agent flow =====
   const userMessageId = nanoid();
@@ -969,31 +968,31 @@ const V2ChatCompletionController = async (req, res) => {
       const lastUserMsg = [...request.messages].reverse().find((msg) => msg.role === 'user');
       const userQuestion = lastUserMsg?.content || '';
 
-      const agentOutputsText = formatChunksForSummary(textChunks);
-
       let summaryGenerated = false;
 
+      let lastSevenMessages = [];
       let recentMessagesText = '';
       try {
         const historyMessages = await loadConversationMessages(conversationId, userSn);
-        if (historyMessages.length > 0) {
-          const lastFive = historyMessages.slice(-7);
-          recentMessagesText = lastFive
-            .map((msg, idx) => {
-              if (!msg || typeof msg !== 'object') {
-                return '';
-              }
-              const index = idx + 1;
-              const role = msg.role || (msg.isCreatedByUser === true ? 'user' : 'assistant');
-              const content = msg.text || msg.content || '';
-              return `${index}\uFF09\u89D2\u8272\uFF1A${role}\uFF0C\u5185\u5BB9\uFF1A${content || '\uFF08\u7A7A\uFF09'}`;
-            })
-            .filter(Boolean)
-            .join('\n');
-        }
+        lastSevenMessages = historyMessages.slice(-7);
+        recentMessagesText = lastSevenMessages
+          .map((msg, idx) => {
+            if (!msg || typeof msg !== 'object') {
+              return '';
+            }
+            const index = idx + 1;
+            const role = msg.role || (msg.isCreatedByUser === true ? 'user' : 'assistant');
+            const content = msg.text || msg.content || '';
+            return `${index}\uFF09\u89D2\u8272\uFF1A${role}\uFF0C\u5185\u5BB9\uFF1A${content || '\uFF08\u7A7A\uFF09'}`;
+          })
+          .filter(Boolean)
+          .join('\n');
       } catch (msgErr) {
         logger.warn('[V2 API] Failed to load conversation messages for summary:', msgErr);
       }
+
+      const agentOutputsText =
+        formatInProgressAgentOutputs(filteredErrorParts) ?? EMPTY_AGENT_OUTPUTS_TEXT;
 
       if (run) {
         try {
