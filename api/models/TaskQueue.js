@@ -134,7 +134,13 @@ const TaskQueueSchema = new mongoose.Schema(
       type: String,
     },
 
-    // === 时间 ===
+    // === 数据保留 ===
+    // 软删除标记：用户清除后不再出现在任何任务列表，但文档保留供审计/回溯
+    cleared: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
     completedAt: {
       type: Date,
     },
@@ -153,6 +159,11 @@ TaskQueueSchema.index({ fromUserId: 1, status: 1 });
 TaskQueueSchema.index({ toUserId: 1, type: 1 });
 TaskQueueSchema.index({ sourceConversationId: 1, sourceTurnSeq: 1 });
 TaskQueueSchema.index({ subagentTaskId: 1 });
+// 查询默认排除已清理任务（配合各路由的 cleared: { $ne: true } 过滤）
+TaskQueueSchema.index({ sourceConversationId: 1, cleared: 1 });
+// 数据保留：完结任务 7 天后由 TTL 回收。completedAt 仅在终态写入（现有 PATCH
+// 逻辑），未完结任务无该字段永不过期。硬删仅由此 TTL 执行，应用层只做软删。
+TaskQueueSchema.index({ completedAt: 1 }, { expireAfterSeconds: 7 * 24 * 60 * 60 });
 
 const TaskQueue = mongoose.models.TaskQueue || mongoose.model('TaskQueue', TaskQueueSchema);
 

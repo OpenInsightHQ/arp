@@ -67,7 +67,7 @@ router.get('/', requireTaskQueueAuth, async (req, res) => {
     const userId = req.user.id;
     const { status, type, page = 1, limit = 20 } = req.query;
 
-    const filter = { toUserId: userId };
+    const filter = { toUserId: userId, cleared: { $ne: true } };
 
     if (status) {
       filter.status = status;
@@ -472,7 +472,7 @@ router.get('/by-conversation/:conversationId', requireTaskQueueAuth, async (req,
     const { conversationId } = req.params;
     const { status } = req.query;
 
-    const filter = { sourceConversationId: conversationId };
+    const filter = { sourceConversationId: conversationId, cleared: { $ne: true } };
     if (status) {
       filter.status = status;
     }
@@ -484,6 +484,41 @@ router.get('/by-conversation/:conversationId', requireTaskQueueAuth, async (req,
     return res.json({ tasks: visibleTasks });
   } catch (error) {
     logger.error('[GET /api/task-queue/by-conversation] Error:', error);
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * DELETE /api/task-queue/by-conversation/:conversationId/completed
+ * 软删除会话内已完结任务（completed/rejected/dismissed/failed/aborted）：
+ * 置 cleared=true，不再出现在任务列表，文档保留（审计/回溯），
+ * 由 completedAt TTL（7 天）最终回收。活跃任务不受影响。
+ * 权限：toUserId 或 fromUserId 匹配当前用户
+ */
+router.delete('/by-conversation/:conversationId/completed', requireTaskQueueAuth, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { conversationId } = req.params;
+
+    const result = await TaskQueue.updateMany(
+      {
+        sourceConversationId: conversationId,
+        status: { $in: ['completed', 'rejected', 'dismissed', 'failed', 'aborted'] },
+        cleared: { $ne: true },
+        $or: [{ toUserId: userId }, { fromUserId: userId }],
+      },
+      { $set: { cleared: true } },
+    );
+
+    logger.info('[DELETE /api/task-queue/by-conversation/completed] Cleared finished tasks', {
+      conversationId,
+      userId,
+      cleared: result.modifiedCount,
+    });
+
+    return res.json({ success: true, cleared: result.modifiedCount });
+  } catch (error) {
+    logger.error('[DELETE /api/task-queue/by-conversation/completed] Error:', error);
     return res.status(500).json({ error: error.message });
   }
 });

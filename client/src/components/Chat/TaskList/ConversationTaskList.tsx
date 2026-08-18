@@ -1,8 +1,20 @@
 /* eslint-disable i18next/no-literal-string */
 import React, { useState, useEffect, useCallback } from 'react';
-import { Clock, CheckCircle2, Loader2, AlertCircle, ChevronDown, ChevronUp } from 'lucide-react';
+import {
+  Clock,
+  CheckCircle2,
+  Loader2,
+  AlertCircle,
+  ChevronDown,
+  ChevronUp,
+  Trash2,
+} from 'lucide-react';
 import { cn } from '~/utils';
-import { getTasksByConversation, type TaskQueueItem } from 'librechat-data-provider';
+import {
+  getTasksByConversation,
+  clearCompletedTasks,
+  type TaskQueueItem,
+} from 'librechat-data-provider';
 import TaskForm from './TaskForm';
 
 interface ConversationTaskListProps {
@@ -23,11 +35,14 @@ const statusConfig: Record<string, { icon: React.ReactNode; color: string }> = {
 };
 
 const INTERACTIVE_STATUSES = ['pending', 'accepted'];
+const TERMINAL_STATUSES = ['completed', 'rejected', 'dismissed', 'failed', 'aborted'];
 
 export default function ConversationTaskList({ conversationId }: ConversationTaskListProps) {
   const [tasks, setTasks] = useState<TaskQueueItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState(true);
+  const [showHistory, setShowHistory] = useState(false);
+  const [clearing, setClearing] = useState(false);
 
   const fetchTasks = useCallback(async () => {
     try {
@@ -47,43 +62,48 @@ export default function ConversationTaskList({ conversationId }: ConversationTas
     return () => clearInterval(interval);
   }, [fetchTasks]);
 
+  const handleClearCompleted = useCallback(async () => {
+    setClearing(true);
+    try {
+      await clearCompletedTasks(conversationId);
+      await fetchTasks();
+      setShowHistory(false);
+    } catch {
+      /* keep current list on failure */
+    } finally {
+      setClearing(false);
+    }
+  }, [conversationId, fetchTasks]);
+
   if (loading || tasks.length === 0) return null;
 
-  // type='subagent' tasks are AI-execution subtasks: never show a response
-  // form. Pending ones (created, not yet dispatched) still belong in the
-  // execution section so the user sees the decomposition plan.
-  const isAiExecution = (t: TaskQueueItem) => t.type === 'subagent';
-  const interactiveTasks = tasks.filter(
-    (t) => INTERACTIVE_STATUSES.includes(t.status) && !isAiExecution(t),
-  );
+  const interactiveTasks = tasks.filter((t) => INTERACTIVE_STATUSES.includes(t.status));
   const runningTasks = tasks.filter(
     (t) =>
       t.status === 'running' ||
       t.status === 'in_progress' ||
-      (isAiExecution(t) && t.status === 'pending') ||
-      (isAiExecution(t) && t.status === 'waiting_agent'),
+      t.status === 'waiting_agent' ||
+      (t.type === 'subagent' && INTERACTIVE_STATUSES.includes(t.status)),
   );
-  const otherTasks = tasks.filter(
-    (t) => !interactiveTasks.includes(t) && !runningTasks.includes(t),
-  );
+  const activeCount = interactiveTasks.length + runningTasks.length;
+  const finishedTasks = tasks.filter((t) => TERMINAL_STATUSES.includes(t.status));
+  // newest finished first for the history view
+  const finishedNewestFirst = [...finishedTasks].reverse();
 
   return (
-    <div
-      className={cn(
-        'border-t border-border-light',
-        'bg-surface-secondary/50',
-        'max-h-[300px] overflow-y-auto',
-      )}
-    >
+    <div className="bg-surface-secondary/50 max-h-[300px] overflow-y-auto border-t border-border-light">
       <button
         className="flex w-full items-center gap-2 px-4 py-2 text-xs font-medium text-text-secondary transition-colors hover:bg-surface-tertiary"
         onClick={() => setExpanded(!expanded)}
       >
         {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronUp className="h-3 w-3" />}
-        <span>Tasks ({tasks.length})</span>
-        {interactiveTasks.length > 0 && (
-          <span className="rounded-full bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-bold text-amber-600">
-            {interactiveTasks.length} pending
+        <span>Tasks</span>
+        <span className="rounded-full bg-blue-500/20 px-1.5 py-0.5 text-[10px] font-bold text-blue-600">
+          {activeCount} active
+        </span>
+        {finishedTasks.length > 0 && (
+          <span className="rounded-full bg-surface-tertiary px-1.5 py-0.5 text-[10px] font-bold text-text-secondary">
+            {finishedTasks.length} done
           </span>
         )}
       </button>
@@ -96,11 +116,37 @@ export default function ConversationTaskList({ conversationId }: ConversationTas
           {interactiveTasks.map((task) => (
             <TaskCard key={task._id} task={task} onSubmitted={fetchTasks} interactive />
           ))}
-          {otherTasks.length > 0 && (
-            <div className="space-y-1 pt-1">
-              {otherTasks.slice(-3).map((task) => (
-                <TaskCard key={task._id} task={task} onSubmitted={fetchTasks} />
-              ))}
+
+          {finishedTasks.length > 0 && (
+            <div className="pt-1">
+              <div className="flex items-center justify-between">
+                <button
+                  className="flex items-center gap-1 text-[11px] text-text-secondary hover:text-text-primary"
+                  onClick={() => setShowHistory(!showHistory)}
+                >
+                  {showHistory ? (
+                    <ChevronDown className="h-3 w-3" />
+                  ) : (
+                    <ChevronUp className="h-3 w-3" />
+                  )}
+                  Completed ({finishedTasks.length})
+                </button>
+                <button
+                  className="flex items-center gap-1 text-[11px] text-text-secondary hover:text-red-500"
+                  disabled={clearing}
+                  onClick={handleClearCompleted}
+                >
+                  <Trash2 className="h-3 w-3" />
+                  {clearing ? 'Clearing...' : 'Clear'}
+                </button>
+              </div>
+              {showHistory && (
+                <div className="mt-1 space-y-1">
+                  {finishedNewestFirst.map((task) => (
+                    <TaskCard key={task._id} task={task} onSubmitted={fetchTasks} compact />
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -114,18 +160,21 @@ function TaskCard({
   onSubmitted,
   interactive = false,
   running = false,
+  compact = false,
 }: {
   task: TaskQueueItem;
   onSubmitted: () => void;
   interactive?: boolean;
   running?: boolean;
+  compact?: boolean;
 }) {
   const config = statusConfig[task.status] ?? statusConfig.pending;
 
   return (
     <div
       className={cn(
-        'rounded-lg border p-3',
+        'rounded-lg border',
+        compact ? 'p-2 opacity-75' : 'p-3',
         interactive
           ? 'border-amber-300/50 bg-amber-50/30 dark:border-amber-500/20 dark:bg-amber-500/5'
           : running
@@ -137,18 +186,18 @@ function TaskCard({
         <span className={cn('mt-0.5', config.color)}>{config.icon}</span>
         <div className="min-w-0 flex-1">
           <div className="truncate text-xs font-medium text-text-primary">{task.title}</div>
-          {task.description && (
+          {!compact && task.description && (
             <div className="mt-0.5 line-clamp-2 text-xs text-text-secondary">
               {task.description}
             </div>
           )}
           {task.resultSummary && (task.status === 'completed' || task.status === 'failed') && (
-            <div className="bg-surface-tertiary/50 mt-1 rounded p-1.5 text-xs text-text-secondary">
+            <div className="bg-surface-tertiary/50 mt-1 line-clamp-3 rounded p-1.5 text-xs text-text-secondary">
               {task.resultSummary}
             </div>
           )}
           {interactive && <TaskForm task={task} onSubmitted={onSubmitted} />}
-          {task.subagentName && (
+          {!compact && task.subagentName && (
             <div className="mt-1 text-[10px] text-text-tertiary">Subagent: {task.subagentName}</div>
           )}
         </div>

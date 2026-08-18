@@ -1452,6 +1452,10 @@ export function submitTaskQueueItem(taskId: string, formResponse: Record<string,
   return request.post(`${endpoints.taskQueueItem(taskId)}/submit`, { formResponse });
 }
 
+export function clearCompletedTasks(conversationId: string): Promise<{ success: boolean; cleared: number }> {
+  return request.delete(`${endpoints.taskQueue()}/by-conversation/${encodeURIComponent(conversationId)}/completed`);
+}
+
 export function getPIFiles(agentId: string, sessionId: string): Promise<PIFilesResponse> {
   return request.get(endpoints.piFiles(agentId, sessionId));
 }

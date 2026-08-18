@@ -86,6 +86,7 @@ export {
   respondTaskQueueItem,
   getTasksByConversation,
   submitTaskQueueItem,
+  clearCompletedTasks,
   type TaskQueueItem,
   type TaskFormField,
 } from './data-service';
