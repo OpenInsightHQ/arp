@@ -13,6 +13,7 @@ import {
 import type {
   AgentToolResources,
   AgentToolOptions,
+  AgentSkill,
   TEndpointOption,
   TFile,
   Agent,
@@ -33,6 +34,7 @@ import {
 } from '~/utils';
 import { filterFilesByEndpointConfig } from '~/files';
 import { appendUniquePrompt, buildVisualizationPrompt, generateArtifactsPrompt } from '~/prompts';
+import { buildAvailableSkillsPrompt } from '~/prompts';
 import { getSystemPromptOrSeed } from '~/prompts';
 import { getProviderConfig } from '~/endpoints';
 import { primeResources } from './resources';
@@ -87,6 +89,7 @@ export interface InitializeAgentParams {
     model: string | null;
     tool_options: AgentToolOptions | undefined;
     tool_resources: AgentToolResources | undefined;
+    skills: AgentSkill[] | undefined;
   }) => Promise<{
     /** Full tool instances (only present when definitionsOnly=false) */
     tools?: GenericTool[];
@@ -299,6 +302,7 @@ export async function initializeAgent(
     model: agent.model,
     tool_options: agent.tool_options,
     tool_resources,
+    skills: agent.skills ?? undefined,
   })) ?? {
     tools: [],
     toolContextMap: {},
@@ -491,6 +495,14 @@ export async function initializeAgent(
     agent.additional_instructions = appendUniquePrompt(
       agent.additional_instructions,
       getLangText(getLangFromReq(req)),
+    );
+  }
+
+  const availableSkillsPrompt = buildAvailableSkillsPrompt(agent.skills);
+  if (availableSkillsPrompt) {
+    agent.additional_instructions = appendUniquePrompt(
+      agent.additional_instructions,
+      availableSkillsPrompt,
     );
   }
 

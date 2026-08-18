@@ -58,8 +58,7 @@ const fs = require('fs');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 
-const MAX_PI_FILE_SIZE_BYTES =
-  parseInt(process.env.PI_UPLOAD_LIMIT_MB || '1024', 10) * 1024 * 1024;
+const MAX_PI_FILE_SIZE_BYTES = parseInt(process.env.PI_UPLOAD_LIMIT_MB || '1024', 10) * 1024 * 1024;
 
 const pathSeparatorRegex = /[\\/\0]/;
 
@@ -333,6 +332,91 @@ PI will handle the file operation automatically - it can create new documents, m
   });
 
   tools.push(piGenerateDocumentTool);
+
+  const formatSkillResult = (result) => {
+    if (!result.success) {
+      return `Error: ${result.error}`;
+    }
+
+    const data = result.data;
+    let output = data.output || data.message || '';
+
+    if (data.files && data.files.length > 0) {
+      output += '\n\n**Generated Files:**\n';
+      for (const file of data.files) {
+        output += `- **${file.name}**`;
+        if (file.size) {
+          output += ` (${(file.size / 1024).toFixed(2)} KB)`;
+        }
+        if (file.url) {
+          output += `\n  Download: ${file.url}`;
+        }
+        output += '\n';
+      }
+    }
+
+    return output;
+  };
+
+  const piExecuteSkillTool = new DynamicStructuredTool({
+    name: 'execute_skill',
+    description: `Execute a registered skill by name.
+
+Use this tool when the user's request matches one of the skills listed in the <available_skills> section of the system prompt (match by the skill description's usage cues).
+
+Rules:
+- skillName MUST be one of the names listed in <available_skills>.
+- Pass the user's request in 'input' exactly as stated, without interpretation or restructuring.
+- The skill runs asynchronously and returns its final output and any generated files.`,
+    schema: z.object({
+      skillName: z
+        .string()
+        .describe(
+          'The skill name exactly as listed in <available_skills>. Do not invent skill names.',
+        ),
+      input: z
+        .string()
+        .describe(
+          "The user's request related to this skill. Pass the relevant part of the user's message as stated, without modification.",
+        ),
+    }),
+    func: async ({ skillName, input }) => {
+      const onChunk = streamId
+        ? async (content) => {
+            await emitStreamChunk(content);
+          }
+        : undefined;
+
+      const onThinking = streamId
+        ? async (thinkingData) => {
+            await emitThinking(thinkingData);
+          }
+        : undefined;
+
+      const onToolEvent = streamId
+        ? async (toolData) => {
+            await emitToolEvent(toolData);
+          }
+        : undefined;
+
+      const result = await handlePIToolCall(
+        {
+          name: 'execute_skill',
+          arguments: { skillName, input },
+          agentId: effectiveAgentId,
+          sessionId,
+        },
+        onChunk,
+        onThinking,
+        onToolEvent,
+        userId,
+      );
+
+      return formatSkillResult(result);
+    },
+  });
+
+  tools.push(piExecuteSkillTool);
   return tools;
 };
 
@@ -551,7 +635,7 @@ const loadTools = async ({
         res: options.res,
         agentId: agent?.id,
         conversationId: options.conversationId,
-        userId: user?.id,
+        userId: typeof user === 'string' ? user : (user?.id ?? options.req?.user?.id),
       })
     : [];
   const piToolNames = new Set(piTools.map((t) => t.name));
@@ -575,7 +659,7 @@ const loadTools = async ({
         const { files, toolContext } = await primeCodeFiles(
           {
             ...options,
-        agentId: agent?.id,
+            agentId: agent?.id,
           },
           codeApiKey,
         );
@@ -695,7 +779,6 @@ const loadTools = async ({
       continue;
     }
   }
-
 
   if (returnMap) {
     return requestedTools;

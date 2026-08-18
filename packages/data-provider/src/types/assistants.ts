@@ -207,6 +207,12 @@ export type SupportContact = {
   email?: string;
 };
 
+/** Skill metadata exposed to the agent via <available_skills> and executed by the execute_skill tool */
+export type AgentSkill = {
+  name: string;
+  description?: string;
+};
+
 /**
  * Specifies who can invoke a tool.
  * - 'direct': LLM can call directly
@@ -278,6 +284,8 @@ export type Agent = {
   tool_options?: AgentToolOptions;
   /** Dataset IDs for vocabulary search */
   datasetIds?: string[];
+  /** Skills executable via the execute_skill tool (PI /prompt `/skill:` trigger) */
+  skills?: AgentSkill[];
 };
 
 export type TAgentsMap = Record<string, Agent | undefined>;

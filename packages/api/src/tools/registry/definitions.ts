@@ -51,6 +51,23 @@ export const piGenerateDocumentSchema: ExtendedJsonSchema = {
   required: ['request'],
 };
 
+export const piExecuteSkillSchema: ExtendedJsonSchema = {
+  type: 'object',
+  properties: {
+    skillName: {
+      type: 'string',
+      description:
+        'The skill name exactly as listed in <available_skills> of the system prompt. Do not invent skill names.',
+    },
+    input: {
+      type: 'string',
+      description:
+        "The user's request related to this skill. Pass the relevant part of the user's message as stated, without modification.",
+    },
+  },
+  required: ['skillName', 'input'],
+};
+
 /** Google Search tool JSON schema */
 export const googleSearchSchema: ExtendedJsonSchema = {
   type: 'object',
@@ -655,6 +672,20 @@ DO NOT interpret or restructure the user's request. Pass the user's original mes
 
 Supported file types: docx, xlsx, pptx, pdf, txt, md, json, yaml, js, ts, py, css, svg.`,
     schema: piGenerateDocumentSchema,
+    toolType: 'builtin',
+    responseFormat: 'content',
+  },
+  execute_skill: {
+    name: 'execute_skill',
+    description: `Execute a registered skill by name.
+
+Use this tool when the user's request matches one of the skills listed in the <available_skills> section of the system prompt (match by the skill description's usage cues).
+
+Rules:
+- skillName MUST be one of the names listed in <available_skills>.
+- Pass the user's request in 'input' exactly as stated, without interpretation or restructuring.
+- The skill runs asynchronously and returns its final output and any generated files.`,
+    schema: piExecuteSkillSchema,
     toolType: 'builtin',
     responseFormat: 'content',
   },

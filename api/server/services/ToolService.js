@@ -415,11 +415,14 @@ const nativeTools = new Set([
   Tools.file_search,
   Tools.web_search,
   'office_skills',
+  'execute_skill',
 ]);
 
 /** PI tools that extend execute_code capability */
 const piTools = new Set(['office_skills']);
 
+/** Skill execution tool - mounted for any agent with non-empty skills when PI is configured */
+const skillTools = new Set(['execute_skill']);
 
 /** Gallery SQL tools - removed save_report_sql (publish API handles SQL extraction automatically) */
 const galleryTools = new Set([]);
@@ -428,8 +431,8 @@ const galleryTools = new Set([]);
 const isBuiltInTool = (toolName) =>
   Boolean(
     manifestToolMap[toolName] ||
-    toolkits.some((t) => t.pluginKey === toolName) ||
-    nativeTools.has(toolName),
+      toolkits.some((t) => t.pluginKey === toolName) ||
+      nativeTools.has(toolName),
   );
 
 /**
@@ -458,14 +461,17 @@ async function loadToolDefinitionsWrapper({
 }) {
   logger.info(`[loadToolDefinitionsWrapper] conversationId: ${conversationId || 'not provided'}`);
 
+  /** execute_skill is mounted on skill-bearing agents even when agent.tools is empty */
+  const mountSkillTools = agent.skills?.length > 0 && isPIConfigured(req);
 
-  if (!agent.tools || agent.tools.length === 0) {
+  if ((!agent.tools || agent.tools.length === 0) && !mountSkillTools) {
     return { toolDefinitions: [] };
   }
 
   if (
-    agent.tools.length === 1 &&
-    (agent.tools[0] === AgentCapabilities.context || agent.tools[0] === AgentCapabilities.ocr)
+    agent.tools?.length === 1 &&
+    (agent.tools[0] === AgentCapabilities.context || agent.tools[0] === AgentCapabilities.ocr) &&
+    !mountSkillTools
   ) {
     return { toolDefinitions: [] };
   }
@@ -500,6 +506,9 @@ async function loadToolDefinitionsWrapper({
       if (piTools.has(tool)) {
         return agent.provider === 'pi' && isPIAvailable;
       }
+      if (skillTools.has(tool)) {
+        return isPIAvailable;
+      }
       if (galleryTools.has(tool)) {
         return true; // Gallery tools are always available
       }
@@ -513,6 +522,14 @@ async function loadToolDefinitionsWrapper({
     for (const piTool of piTools) {
       if (!filteredTools.includes(piTool)) {
         filteredTools.push(piTool);
+      }
+    }
+  }
+
+  if (mountSkillTools) {
+    for (const skillTool of skillTools) {
+      if (!filteredTools.includes(skillTool)) {
+        filteredTools.push(skillTool);
       }
     }
   }
@@ -860,13 +877,18 @@ async function loadAgentTools({
     });
   }
 
+  /** execute_skill is mounted on skill-bearing agents even when agent.tools is empty */
+  const mountSkillTools = agent.skills?.length > 0 && isPIConfigured(req);
+
   if (!agent.tools || agent.tools.length === 0) {
-    return { toolDefinitions: [] };
+    if (!mountSkillTools) {
+      return { toolDefinitions: [] };
+    }
   } else if (
-    agent.tools &&
     agent.tools.length === 1 &&
     /** Legacy handling for `ocr` as may still exist in existing Agents */
-    (agent.tools[0] === AgentCapabilities.context || agent.tools[0] === AgentCapabilities.ocr)
+    (agent.tools[0] === AgentCapabilities.context || agent.tools[0] === AgentCapabilities.ocr) &&
+    !mountSkillTools
   ) {
     return { toolDefinitions: [] };
   }
@@ -911,6 +933,8 @@ async function loadAgentTools({
         return includesWebSearch;
       } else if (piTools.has(tool)) {
         return agent.provider === 'pi' && isPIAvailable;
+      } else if (skillTools.has(tool)) {
+        return isPIAvailable;
       } else if (galleryTools.has(tool)) {
         return true; // Gallery tools are always available
       } else if (!areToolsEnabled && !tool.includes(actionDelimiter)) {
@@ -923,6 +947,14 @@ async function loadAgentTools({
     for (const piTool of piTools) {
       if (!_agentTools.includes(piTool)) {
         _agentTools.push(piTool);
+      }
+    }
+  }
+
+  if (mountSkillTools) {
+    for (const skillTool of skillTools) {
+      if (!_agentTools.includes(skillTool)) {
+        _agentTools.push(skillTool);
       }
     }
   }

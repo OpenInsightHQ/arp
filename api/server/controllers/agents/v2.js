@@ -95,8 +95,9 @@ function createToolLoader(signal, definitionsOnly = true) {
     provider,
     tool_options,
     tool_resources,
+    skills,
   }) {
-    const agent = { id: agentId, tools, provider, model, tool_options };
+    const agent = { id: agentId, tools, provider, model, tool_options, skills };
     try {
       return await loadAgentTools({
         req,
@@ -437,6 +438,7 @@ const V2ChatCompletionController = async (req, res) => {
           toolRegistry: primaryConfig.toolRegistry,
           userMCPAuthMap: primaryConfig.userMCPAuthMap,
           tool_resources: primaryConfig.tool_resources,
+          conversationId,
         });
       },
       toolEndCallback,

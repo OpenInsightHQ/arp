@@ -1,5 +1,5 @@
 const { logger } = require('@librechat/data-schemas');
-const { createAxiosInstance } = require('@librechat/api');
+const { createAxiosInstance, getPiSystemPrompt } = require('@librechat/api');
 const mongoose = require('mongoose');
 const { MongoClient } = require('mongodb');
 
@@ -594,7 +594,7 @@ const readMemoryDetail = async ({ memoryId, userId }) => {
   try {
     const client = await getMongoClient();
     const db = client.db();
-    
+
     // Query memory entry by _id and userId
     const memoryEntry = await db.collection('memoryentries').findOne({
       _id: new mongoose.Types.ObjectId(memoryId),
@@ -616,9 +616,14 @@ const readMemoryDetail = async ({ memoryId, userId }) => {
     };
 
     // If source.messageIds exists, fetch the original messages
-    if (memoryEntry.source && memoryEntry.source.messageIds && memoryEntry.source.messageIds.length > 0) {
+    if (
+      memoryEntry.source &&
+      memoryEntry.source.messageIds &&
+      memoryEntry.source.messageIds.length > 0
+    ) {
       const messageIds = memoryEntry.source.messageIds;
-      const messages = await db.collection('messages')
+      const messages = await db
+        .collection('messages')
         .find({ messageId: { $in: messageIds } })
         .sort({ createdAt: 1 })
         .toArray();
@@ -638,13 +643,188 @@ const readMemoryDetail = async ({ memoryId, userId }) => {
   }
 };
 
+const buildSkillMessage = (skillName, input) => {
+  const trimmedInput = typeof input === 'string' ? input.trim() : '';
+  if (!trimmedInput) {
+    return `/skill:${skillName}`;
+  }
+  return `/skill:${skillName}\n\n${trimmedInput}`;
+};
+
+const collectSkillFiles = async (agentId, sessionId, userId, modifiedSince) => {
+  if (!agentId || !sessionId) {
+    return [];
+  }
+
+  try {
+    let url = `${PI_HOST}/files?agentId=${encodeURIComponent(String(agentId))}&sessionId=${encodeURIComponent(String(sessionId))}&recursive=true`;
+    if (modifiedSince) {
+      url += `&modifiedSince=${encodeURIComponent(new Date(modifiedSince).toISOString())}`;
+    }
+
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: { 'api-key': PI_API_KEY, 'X-User-Id': String(userId) },
+    });
+
+    if (!response.ok) {
+      logger.warn('[PIService] collectSkillFiles: PI files API returned', {
+        status: response.status,
+      });
+      return [];
+    }
+
+    const data = await response.json();
+    return (data.files || [])
+      .filter((f) => !f.isDirectory)
+      .map((f) => ({
+        name: (f.path || f.name || '').split('/').pop(),
+        path: f.path || f.name,
+        url: `/arp/api/pi/files/download?agentId=${encodeURIComponent(String(agentId))}&sessionId=${encodeURIComponent(String(sessionId))}&path=${encodeURIComponent(f.path || f.name)}`,
+        mimeType: f.mimeType || null,
+        size: f.size || null,
+      }));
+  } catch (error) {
+    logger.warn('[PIService] collectSkillFiles failed:', { error: error.message });
+    return [];
+  }
+};
+
+/**
+ * Executes a skill on the PI backend via `/prompt` with a `/skill:${skillName}`
+ * message (same trigger format as GallerySkillTaskExecutor), using the current
+ * agentId/sessionId/userId. Streams progress via callbacks and returns the
+ * collected output plus files generated during the run.
+ */
+const executeSkill = async (
+  { skillName, input, agentId, sessionId },
+  onChunk,
+  onThinking,
+  onToolEvent,
+  userId,
+) => {
+  if (!isPIConfigured()) {
+    return { success: false, error: 'PI not configured' };
+  }
+  if (!skillName) {
+    return { success: false, error: 'skillName is required' };
+  }
+
+  const finalAgentId = agentId || 'default';
+  const message = buildSkillMessage(skillName, input);
+  const startedAt = new Date();
+
+  try {
+    const response = await fetch(`${PI_HOST}/prompt`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'api-key': PI_API_KEY,
+        'X-User-Id': String(userId),
+      },
+      body: JSON.stringify({
+        message,
+        agentId: finalAgentId,
+        sessionId,
+        cwd: null,
+        stream: true,
+        systemPrompt: await getPiSystemPrompt(),
+      }),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      logger.error('[PIService] executeSkill failed:', errText);
+      return { success: false, error: errText };
+    }
+
+    let output = '';
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let currentEvent = null;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (line.startsWith('event: ')) {
+          currentEvent = line.slice(7).trim();
+          continue;
+        }
+        if (!line.startsWith('data: ')) {
+          continue;
+        }
+
+        let data;
+        try {
+          data = JSON.parse(line.slice(6));
+        } catch {
+          continue;
+        }
+
+        if (currentEvent === 'error') {
+          logger.error('[PIService] executeSkill PI error:', data.message);
+          return { success: false, error: data.message || 'PI returned an error' };
+        }
+
+        if (currentEvent === 'thinking') {
+          if (data.type === 'thinking_delta' && data.delta && onThinking) {
+            onThinking({ delta: data.delta });
+          }
+          continue;
+        }
+
+        if (currentEvent === 'tool_start' && onToolEvent) {
+          onToolEvent({ type: 'tool_start', toolName: data.toolName, args: data.args });
+          continue;
+        }
+
+        if (currentEvent === 'tool_end' && onToolEvent) {
+          onToolEvent({ type: 'tool_end', toolName: data.toolName });
+          continue;
+        }
+
+        if (data.type === 'text_delta' && data.delta) {
+          output += data.delta;
+          if (onChunk) {
+            onChunk(data.delta);
+          }
+        }
+      }
+    }
+
+    const files = await collectSkillFiles(finalAgentId, sessionId, userId, startedAt);
+
+    return {
+      success: true,
+      data: {
+        skillName,
+        message,
+        output,
+        files,
+      },
+    };
+  } catch (error) {
+    logger.error('[PIService] executeSkill error:', error.message);
+    return { success: false, error: error.message };
+  }
+};
+
 const getToolDefinitions = () => {
   return [
     {
       type: 'function',
       function: {
         name: 'read_memory_detail',
-        description: '读取长期记忆的详细信息。当需要了解记忆摘要背后的完整上下文时，使用记忆ID调用此工具获取原始对话内容。',
+        description:
+          '读取长期记忆的详细信息。当需要了解记忆摘要背后的完整上下文时，使用记忆ID调用此工具获取原始对话内容。',
         parameters: {
           type: 'object',
           properties: {
@@ -684,6 +864,28 @@ Supported file types: docx, xlsx, pptx, pdf, txt, md, json, yaml, js, ts, py, ht
         required: ['request'],
       },
     },
+    {
+      type: 'function',
+      function: {
+        name: 'execute_skill',
+        description:
+          'Execute a registered skill by name. Only use skills listed in the <available_skills> section. Pass the user request in the input parameter exactly as stated.',
+        parameters: {
+          type: 'object',
+          properties: {
+            skillName: {
+              type: 'string',
+              description: 'The skill name exactly as listed in <available_skills>.',
+            },
+            input: {
+              type: 'string',
+              description: "The user's request related to this skill, passed as stated.",
+            },
+          },
+          required: ['skillName', 'input'],
+        },
+      },
+    },
   ];
 };
 
@@ -708,6 +910,24 @@ const handlePIToolCall = async (
       memoryId: args.memoryId,
       userId,
     });
+  }
+
+  if (name === 'execute_skill') {
+    if (!args.skillName) {
+      return { success: false, error: 'skillName is required' };
+    }
+    return executeSkill(
+      {
+        skillName: args.skillName,
+        input: args.input || args.request || '',
+        agentId: finalAgentId,
+        sessionId,
+      },
+      onChunk,
+      onThinking,
+      onToolEvent,
+      userId,
+    );
   }
 
   if (name !== 'office_skills') {
@@ -746,6 +966,7 @@ module.exports = {
   sendToPIStream,
   executeCode,
   executeCodeStream,
+  executeSkill,
   generateDocument,
   generateDocumentStream,
   uploadFile,

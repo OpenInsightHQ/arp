@@ -123,6 +123,16 @@ const agentSchema = new Schema<IAgent>(
       type: Schema.Types.Mixed,
       default: undefined,
     },
+    /** Skills executable via the execute_skill tool (PI /prompt `/skill:` trigger) */
+    skills: {
+      type: [
+        {
+          name: { type: String, required: true },
+          description: { type: String, default: '' },
+        },
+      ],
+      default: undefined,
+    },
   },
   {
     timestamps: true,

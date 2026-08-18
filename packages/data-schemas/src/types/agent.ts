@@ -1,5 +1,5 @@
 import { Document, Types } from 'mongoose';
-import type { GraphEdge, AgentToolOptions } from 'librechat-data-provider';
+import type { GraphEdge, AgentToolOptions, AgentSkill } from 'librechat-data-provider';
 
 export interface ISupportContact {
   name?: string;
@@ -44,6 +44,8 @@ export interface IAgent extends Omit<Document, 'model'> {
   mcpServerNames?: string[];
   /** Per-tool configuration (defer_loading, allowed_callers) */
   tool_options?: AgentToolOptions;
+  /** Skills executable via the execute_skill tool (PI /prompt `/skill:` trigger) */
+  skills?: AgentSkill[];
   /** Dataset ID for vocabulary search */
   datasetId?: string;
 }
