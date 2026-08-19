@@ -463,6 +463,54 @@ Rules:
         userId,
       );
 
+      // Persist skill output files as real message attachments (same pipeline
+      // as office_skills): download from pi, save to uploads, emit attachment
+      // events. Files then render in the attachment area with working
+      // download links instead of living only in the collapsed tool output.
+      if (result.success && !result.background && result.data?.files?.length > 0) {
+        const skillFiles = result.data.files
+          .filter((f) => f.path || f.name)
+          .map((f) => ({
+            sessionId,
+            agentId: effectiveAgentId,
+            name: f.path || f.name,
+            mimeType: f.mimeType,
+          }));
+        const savedSkillFiles = await downloadAndSavePIFiles(skillFiles, userId);
+
+        for (const file of savedSkillFiles) {
+          await emitAttachment({
+            messageId: streamId,
+            file_id: file.file_id,
+            filename: file.filename,
+            filepath: file.filepath,
+            type: file.type,
+            size: file.size,
+          });
+        }
+
+        // Replace raw pi URLs with the persisted attachment paths in the
+        // tool result text so any links the model relays also work.
+        if (savedSkillFiles.length > 0) {
+          let filesSection = '\n\n**Generated Files (attached to the message):**\n';
+          for (const file of savedSkillFiles) {
+            filesSection += `- **${file.filename}**`;
+            if (file.size) {
+              filesSection += ` (${(file.size / 1024).toFixed(2)} KB)`;
+            }
+            filesSection += '\n';
+          }
+          result.data.files = savedSkillFiles.map((f) => ({
+            name: f.filename,
+            path: f.filepath,
+            url: f.filepath,
+            mimeType: f.type,
+            size: f.size,
+          }));
+          result.data.output = `${(result.data.output || '').trimEnd()}${filesSection}`;
+        }
+      }
+
       return formatSkillResult(result);
     },
   });
