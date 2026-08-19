@@ -58,7 +58,16 @@ router.get('/:conversationId', async (req, res) => {
     }
 
     const messages = await getMessages(
-      { conversationId, user: req.user.id },
+      {
+        conversationId,
+        user: req.user.id,
+        // Exclude subagent trace messages (they share the conversationId but
+        // belong to isolated subagent executions, not the visible chat tree)
+        // and messages hidden from the tree (internal /skill: injections,
+        // task_responses context blocks) — same filtering as /api/messages.
+        'metadata.isSubagentTrace': { $ne: true },
+        'metadata.hiddenFromTree': { $ne: true },
+      },
       '-_id -__v -user -streamLog',
     );
     return res.status(200).json(messages);
