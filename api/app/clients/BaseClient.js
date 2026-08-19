@@ -900,11 +900,15 @@ class BaseClient {
     const messages =
       (await getMessages({
         conversationId,
-        // Exclude subagent trace docs: they share the conversationId but are
-        // isolated execution records (parentMessageId = NO_PARENT, never on
-        // the chat thread). Excluded here so they are never loaded into
-        // memory or sent to the model, even defensively.
+        // Exclude subagent trace docs and hidden-from-tree messages: traces
+        // are isolated subagent execution records (parentMessageId =
+        // NO_PARENT, never on the chat thread); hidden messages are internal
+        // injections (/skill: commands, task_responses blocks) and skill
+        // execution transcripts whose summary already lives in the agent's
+        // tool_call output. Excluded here so they are never loaded into
+        // memory or sent to the model.
         'metadata.isSubagentTrace': { $ne: true },
+        'metadata.hiddenFromTree': { $ne: true },
       })) ?? [];
 
     if (messages.length === 0) {
