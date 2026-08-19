@@ -46,12 +46,7 @@ const { getUserPluginAuthValue } = require('~/server/services/PluginService');
 const { createMCPTool, createMCPTools } = require('~/server/services/MCP');
 const { loadAuthValues } = require('~/server/services/Tools/credentials');
 const { getMCPServerTools } = require('~/server/services/Config');
-const {
-  isPIConfigured,
-  handlePIToolCall,
-  downloadPIFile,
-  buildPiFileDownloadUrl,
-} = require('~/server/services/PIService');
+const { isPIConfigured, handlePIToolCall, downloadPIFile } = require('~/server/services/PIService');
 const { scheduleBackgroundSkillFileCollection } = require('~/server/services/BackgroundSkillFiles');
 const { DynamicStructuredTool } = require('@langchain/core/tools');
 const { z } = require('zod');
@@ -260,119 +255,6 @@ const createPITools = (options = {}) => {
     }
   };
 
-  const formatResult = (result, savedFiles) => {
-    if (!result.success) {
-      return `Error: ${result.error}`;
-    }
-
-    const data = result.data;
-    let output = data.message || '';
-
-    if (savedFiles && savedFiles.length > 0) {
-      output += '\n\n**Generated Files:**\n';
-      for (const file of savedFiles) {
-        output += `- **${file.filename}**`;
-        if (file.size) {
-          output += ` (${(file.size / 1024).toFixed(2)} KB)`;
-        }
-        output += `\n  Download: ${buildPiFileDownloadUrl(effectiveAgentId, sessionId, file.filename)}`;
-        output += '\n';
-      }
-    } else if (data.generatedFiles && data.generatedFiles.length > 0) {
-      output += '\n\n**Generated Files:**\n';
-      for (const file of data.generatedFiles) {
-        output += `- ${file.name}`;
-        if (file.size) {
-          output += ` (${(file.size / 1024).toFixed(2)} KB)`;
-        }
-        output += `\n  Download: ${buildPiFileDownloadUrl(effectiveAgentId, sessionId, file.path || file.name)}`;
-        output += '\n';
-      }
-    }
-
-    return output;
-  };
-
-  const piGenerateDocumentTool = new DynamicStructuredTool({
-    name: 'office_skills',
-    description: `Create or modify office files(docx, xlsx, pptx, pdf).
-
-Use this tool for office files(docx, xlsx, pptx, pdf) operations - simply pass the user's original request directly:
-- Create new documents (docx, xlsx, pptx, pdf)
-- Modify existing documents
-- Add content to documents
-- Update specific sections, lines, or chapters
-- Delete content from documents
-- Generate SVG graphics
-
-DO NOT use this tool for generating HTML pages or reports. Use the :::artifact{}::: syntax to output HTML directly.
-
-DO NOT interpret or restructure the user's request. Pass the user's original message directly as the 'request' parameter.
-
-PI will handle the file operation automatically - it can create new documents, modify existing documents, or append to documents based on the user's request.`,
-    schema: z.object({
-      request: z
-        .string()
-        .describe(
-          'The user request - describe what document to create/modify (docx, xlsx, pptx, pdf). Pass it exactly as stated without modification.',
-        ),
-    }),
-    func: async (input) => {
-      const onChunk = streamId
-        ? async (content) => {
-            await emitStreamChunk(content);
-          }
-        : undefined;
-
-      const onThinking = streamId
-        ? async (thinkingData) => {
-            await emitThinking(thinkingData);
-          }
-        : undefined;
-
-      const onToolEvent = streamId
-        ? async (toolData) => {
-            await emitToolEvent(toolData);
-          }
-        : undefined;
-
-      const result = await handlePIToolCall(
-        {
-          name: 'office_skills',
-          arguments: {
-            request: input.request,
-          },
-          agentId: effectiveAgentId,
-          sessionId,
-        },
-        onChunk,
-        onThinking,
-        onToolEvent,
-        userId,
-      );
-
-      const savedFiles =
-        result.success && result.data?.generatedFiles?.length > 0
-          ? await downloadAndSavePIFiles(result.data.generatedFiles, userId)
-          : [];
-
-      for (const file of savedFiles) {
-        await emitAttachment({
-          messageId: streamId,
-          file_id: file.file_id,
-          filename: file.filename,
-          filepath: file.filepath,
-          type: file.type,
-          size: file.size,
-        });
-      }
-
-      return formatResult(result, savedFiles);
-    },
-  });
-
-  tools.push(piGenerateDocumentTool);
-
   const formatSkillResult = (result) => {
     if (!result.success) {
       return `Error: ${result.error}`;
@@ -466,10 +348,10 @@ Rules:
         userId,
       );
 
-      // Persist skill output files as real message attachments (same pipeline
-      // as office_skills): download from pi, save to uploads, emit attachment
-      // events. Files then render in the attachment area with working
-      // download links instead of living only in the collapsed tool output.
+      // Persist skill output files as real message attachments: download
+      // from pi, save to uploads, emit attachment events. Files then render
+      // in the attachment area with working download links instead of living
+      // only in the collapsed tool output.
       if (result.success && !result.background && result.data?.files?.length > 0) {
         const skillFiles = result.data.files
           .filter((f) => f.path || f.name)

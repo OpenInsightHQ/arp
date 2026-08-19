@@ -39,18 +39,6 @@ export interface ToolRegistryDefinition {
   toolType: 'builtin' | 'mcp' | 'action' | 'custom';
 }
 
-export const piGenerateDocumentSchema: ExtendedJsonSchema = {
-  type: 'object',
-  properties: {
-    request: {
-      type: 'string',
-      description:
-        'The user request - can describe what file to create/modify, requirements for artifacts, components, UI, etc. Pass it exactly as stated without modification.',
-    },
-  },
-  required: ['request'],
-};
-
 export const piExecuteSkillSchema: ExtendedJsonSchema = {
   type: 'object',
   properties: {
@@ -654,27 +642,6 @@ const agentToolDefinitions: Record<string, ToolRegistryDefinition> = {
 
 /** PI Tool definitions */
 const piToolDefinitions: Record<string, ToolRegistryDefinition> = {
-  office_skills: {
-    name: 'office_skills',
-    description: `Create or modify office files(docx, xlsx, pptx, pdf).
-
-Use this tool for office files(docx, xlsx, pptx, pdf) operations - simply pass the user's original request directly:
-- Create new documents (docx, xlsx, pptx, pdf)
-- Modify existing documents
-- Add content to documents
-- Update specific sections, lines, or chapters
-- Delete content from documents
-- Generate SVG graphics
-
-DO NOT use this tool for generating HTML pages or reports. Use the :::artifact{}::: syntax to output HTML directly.
-
-DO NOT interpret or restructure the user's request. Pass the user's original message directly as the 'request' parameter.
-
-Supported file types: docx, xlsx, pptx, pdf, txt, md, json, yaml, js, ts, py, css, svg.`,
-    schema: piGenerateDocumentSchema,
-    toolType: 'builtin',
-    responseFormat: 'content',
-  },
   execute_skill: {
     name: 'execute_skill',
     description: `Execute a registered skill by name.
