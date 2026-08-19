@@ -40,11 +40,7 @@ async function buildFileLinks(text, agentId, sessionId, userId, startTime) {
   if (uniqueFiles.length === 0) return null;
 
   const truncated = uniqueFiles.length >= MAX_FILE_LINKS && realFiles.length > uniqueFiles.length;
-  const links = uniqueFiles.map((f) => {
-    const displayName = f.path.split('/').pop();
-    const url = `/arp/api/pi/files/download?agentId=${encodeURIComponent(agentId)}&sessionId=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(f.path)}`;
-    return `[📄 ${displayName}](${url})`;
-  });
+  const links = uniqueFiles.map((f) => `[📄 ${f.name}](${f.url})`);
 
   const tail = truncated ? `  ...(+more)` : '';
   return '\n\n---\n📎 下载文件：' + links.join('  ') + tail;

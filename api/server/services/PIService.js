@@ -652,6 +652,14 @@ const buildSkillMessage = (skillName, input) => {
 };
 
 /**
+ * Canonical pi file download link shared by every consumer
+ * (collectPiGeneratedFiles, one-pi buildFileLinks, execute_skill tool
+ * results, GallerySkillTaskRun.files) so all surfaces emit identical URLs.
+ */
+const buildPiFileDownloadUrl = (agentId, sessionId, path) =>
+  `/arp/api/pi/files/download?agentId=${encodeURIComponent(String(agentId))}&sessionId=${encodeURIComponent(String(sessionId))}&path=${encodeURIComponent(String(path))}`;
+
+/**
  * List files generated in a pi session (recursive, optionally filtered by
  * mtime) as structured records with download URLs.
  *
@@ -686,13 +694,16 @@ const collectPiGeneratedFiles = async (agentId, sessionId, userId, modifiedSince
     const data = await response.json();
     return (data.files || [])
       .filter((f) => !f.isDirectory)
-      .map((f) => ({
-        name: (f.path || f.name || '').split('/').pop(),
-        path: f.path || f.name,
-        url: `/arp/api/pi/files/download?agentId=${encodeURIComponent(String(agentId))}&sessionId=${encodeURIComponent(String(sessionId))}&path=${encodeURIComponent(f.path || f.name)}`,
-        mimeType: f.mimeType || null,
-        size: f.size || null,
-      }));
+      .map((f) => {
+        const filePath = f.path || f.name;
+        return {
+          name: (filePath || '').split('/').pop(),
+          path: filePath,
+          url: buildPiFileDownloadUrl(agentId, sessionId, filePath),
+          mimeType: f.mimeType || null,
+          size: f.size || null,
+        };
+      });
   } catch (error) {
     logger.warn('[PIService] collectPiGeneratedFiles failed:', { error: error.message });
     return [];
@@ -1087,6 +1098,7 @@ module.exports = {
   getToolDefinitions,
   handlePIToolCall,
   collectPiGeneratedFiles,
+  buildPiFileDownloadUrl,
   filterPiResultFiles,
   MAX_PI_RESULT_FILES,
   PI_HOST,

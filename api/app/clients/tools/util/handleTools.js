@@ -46,7 +46,12 @@ const { getUserPluginAuthValue } = require('~/server/services/PluginService');
 const { createMCPTool, createMCPTools } = require('~/server/services/MCP');
 const { loadAuthValues } = require('~/server/services/Tools/credentials');
 const { getMCPServerTools } = require('~/server/services/Config');
-const { isPIConfigured, handlePIToolCall, downloadPIFile } = require('~/server/services/PIService');
+const {
+  isPIConfigured,
+  handlePIToolCall,
+  downloadPIFile,
+  buildPiFileDownloadUrl,
+} = require('~/server/services/PIService');
 const { DynamicStructuredTool } = require('@langchain/core/tools');
 const { z } = require('zod');
 const { getRoleByName } = require('~/models/Role');
@@ -269,9 +274,7 @@ const createPITools = (options = {}) => {
         if (file.size) {
           output += ` (${(file.size / 1024).toFixed(2)} KB)`;
         }
-        if (file.filepath) {
-          output += `\n  Download: ${file.filepath}`;
-        }
+        output += `\n  Download: ${buildPiFileDownloadUrl(effectiveAgentId, sessionId, file.filename)}`;
         output += '\n';
       }
     } else if (data.generatedFiles && data.generatedFiles.length > 0) {
@@ -281,9 +284,7 @@ const createPITools = (options = {}) => {
         if (file.size) {
           output += ` (${(file.size / 1024).toFixed(2)} KB)`;
         }
-        if (file.url) {
-          output += `\n  URL: ${file.url}`;
-        }
+        output += `\n  Download: ${buildPiFileDownloadUrl(effectiveAgentId, sessionId, file.path || file.name)}`;
         output += '\n';
       }
     }
@@ -487,27 +488,6 @@ Rules:
             type: file.type,
             size: file.size,
           });
-        }
-
-        // Replace raw pi URLs with the persisted attachment paths in the
-        // tool result text so any links the model relays also work.
-        if (savedSkillFiles.length > 0) {
-          let filesSection = '\n\n**Generated Files (attached to the message):**\n';
-          for (const file of savedSkillFiles) {
-            filesSection += `- **${file.filename}**`;
-            if (file.size) {
-              filesSection += ` (${(file.size / 1024).toFixed(2)} KB)`;
-            }
-            filesSection += '\n';
-          }
-          result.data.files = savedSkillFiles.map((f) => ({
-            name: f.filename,
-            path: f.filepath,
-            url: f.filepath,
-            mimeType: f.type,
-            size: f.size,
-          }));
-          result.data.output = `${(result.data.output || '').trimEnd()}${filesSection}`;
         }
       }
 
