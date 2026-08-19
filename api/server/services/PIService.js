@@ -702,6 +702,45 @@ const collectPiGeneratedFiles = async (agentId, sessionId, userId, modifiedSince
 /** Backwards-compatible alias for existing executeSkill call sites. */
 const collectSkillFiles = collectPiGeneratedFiles;
 
+/** Max files kept after dedupe/truncation (shared across consumers). */
+const MAX_PI_RESULT_FILES = 10;
+
+/**
+ * Shared post-processing for pi file lists:
+ * - optional text filter: keep only files whose basename or path is mentioned
+ *   in `text` (pass null/undefined to keep all)
+ * - dedupe by basename
+ * - truncate to MAX_PI_RESULT_FILES
+ *
+ * Used by one-pi buildFileLinks and GallerySkillTaskRun.files so both
+ * surfaces apply identical filtering rules.
+ */
+const filterPiResultFiles = (files, text = null) => {
+  if (!files || files.length === 0) {
+    return [];
+  }
+
+  const pool =
+    text != null
+      ? files.filter((f) => {
+          const basename = (f.path || f.name || '').split('/').pop();
+          return text.includes(basename) || (f.path && text.includes(f.path));
+        })
+      : files;
+
+  const seen = new Set();
+  const uniqueFiles = [];
+  for (const f of pool) {
+    const base = (f.path || f.name || '').split('/').pop();
+    if (!seen.has(base)) {
+      seen.add(base);
+      uniqueFiles.push(f);
+    }
+  }
+
+  return uniqueFiles.slice(0, MAX_PI_RESULT_FILES);
+};
+
 /**
  * Executes a skill on the PI backend via `/prompt` with a `/skill:${skillName}`
  * message (same trigger format as GallerySkillTaskExecutor), using the current
@@ -1048,6 +1087,8 @@ module.exports = {
   getToolDefinitions,
   handlePIToolCall,
   collectPiGeneratedFiles,
+  filterPiResultFiles,
+  MAX_PI_RESULT_FILES,
   PI_HOST,
   PI_API_KEY,
 };

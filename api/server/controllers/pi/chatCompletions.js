@@ -18,12 +18,12 @@ const {
   appendGalleryVersion,
   upsertGallerySqlQueries,
 } = require('~/server/services/Artifacts/galleryPublishing');
-const { collectPiGeneratedFiles } = require('~/server/services/PIService');
+const { collectPiGeneratedFiles, filterPiResultFiles } = require('~/server/services/PIService');
 
 const PI_HOST = process.env.PI_HOST || process.env.PI_AGENT_URL || 'http://localhost:3000';
 const PI_API_KEY = process.env.PI_API_KEY || 'testkey';
 
-const MAX_FILE_LINKS = 10;
+const MAX_FILE_LINKS = 10; // kept in sync with PIService.MAX_PI_RESULT_FILES
 
 async function buildFileLinks(text, agentId, sessionId, userId, startTime) {
   if (!text || !agentId || !sessionId) return null;
@@ -35,34 +35,18 @@ async function buildFileLinks(text, agentId, sessionId, userId, startTime) {
     return null;
   }
 
-  const matchedFiles = realFiles.filter(f => {
-    const basename = f.path.split('/').pop();
-    return text.includes(basename) || text.includes(f.path);
-  });
+  // Shared filtering: text-mention match, basename dedupe, cap at 10
+  const uniqueFiles = filterPiResultFiles(realFiles, text);
+  if (uniqueFiles.length === 0) return null;
 
-  if (matchedFiles.length === 0) return null;
-
-  const seen = new Set();
-  const uniqueFiles = [];
-  for (const f of matchedFiles) {
-    const base = f.path.split('/').pop();
-    if (!seen.has(base)) {
-      seen.add(base);
-      uniqueFiles.push(f);
-    }
-  }
-
-  const truncated = uniqueFiles.length > MAX_FILE_LINKS;
-  const displayed = truncated ? uniqueFiles.slice(0, MAX_FILE_LINKS) : uniqueFiles;
-
-  const links = displayed.map(f => {
+  const truncated = uniqueFiles.length >= MAX_FILE_LINKS && realFiles.length > uniqueFiles.length;
+  const links = uniqueFiles.map((f) => {
     const displayName = f.path.split('/').pop();
     const url = `/arp/api/pi/files/download?agentId=${encodeURIComponent(agentId)}&sessionId=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(f.path)}`;
     return `[📄 ${displayName}](${url})`;
   });
 
-  const remaining = uniqueFiles.length - MAX_FILE_LINKS;
-  const tail = truncated ? `  ...(+${remaining})` : '';
+  const tail = truncated ? `  ...(+more)` : '';
   return '\n\n---\n📎 下载文件：' + links.join('  ') + tail;
 }
 

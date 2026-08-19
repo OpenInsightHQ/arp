@@ -7,7 +7,7 @@ const {
   generateGallerySkillTaskRunId,
 } = require('../../models/GallerySkillTaskRun');
 const { Conversation } = require('~/db/models');
-const { collectPiGeneratedFiles } = require('~/server/services/PIService');
+const { collectPiGeneratedFiles, filterPiResultFiles } = require('~/server/services/PIService');
 
 const PI_HOST = process.env.PI_HOST || process.env.PI_AGENT_URL || 'http://localhost:3000';
 const PI_API_KEY = process.env.PI_API_KEY || 'testkey';
@@ -99,7 +99,11 @@ const executePiSkillTask = async (task, conversationId) => {
     }
   }
 
-  const files = await collectPiGeneratedFiles(agentId, sessionId, task.userId, task._startedAt);
+  // Shared filtering (same rules as one-pi chat file links): dedupe by
+  // basename, cap at 10 files.
+  const files = filterPiResultFiles(
+    await collectPiGeneratedFiles(agentId, sessionId, task.userId, task._startedAt),
+  );
   return { agentId, sessionId, conversationId, message, textOutput, files };
 };
 
