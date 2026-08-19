@@ -911,6 +911,7 @@ const executeSkill = async (
           message,
           output,
           files: filesSoFar,
+          startedAt: startedAt.toISOString(),
           note:
             `Skill "${skillName}" is still running in the background (over ${Math.round(deadlineMs / 1000)}s). ` +
             'Its output and generated files will appear in the conversation and the task panel when it finishes. ' +
