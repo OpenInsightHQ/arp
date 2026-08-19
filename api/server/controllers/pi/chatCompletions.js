@@ -18,7 +18,7 @@ const {
   appendGalleryVersion,
   upsertGallerySqlQueries,
 } = require('~/server/services/Artifacts/galleryPublishing');
-const { collectPiGeneratedFiles, filterPiResultFiles } = require('~/server/services/PIService');
+const { collectPiGeneratedFiles, filterPiResultFiles, buildPiFileLinks } = require('~/server/services/PIService');
 
 const PI_HOST = process.env.PI_HOST || process.env.PI_AGENT_URL || 'http://localhost:3000';
 const PI_API_KEY = process.env.PI_API_KEY || 'testkey';
@@ -40,10 +40,11 @@ async function buildFileLinks(text, agentId, sessionId, userId, startTime) {
   if (uniqueFiles.length === 0) return null;
 
   const truncated = uniqueFiles.length >= MAX_FILE_LINKS && realFiles.length > uniqueFiles.length;
-  const links = uniqueFiles.map((f) => `[📄 ${f.name}](${f.url})`);
+  const links = buildPiFileLinks(uniqueFiles);
+  if (!links) return null;
 
   const tail = truncated ? `  ...(+more)` : '';
-  return '\n\n---\n📎 下载文件：' + links.join('  ') + tail;
+  return links + tail;
 }
 
 function formatMemories(memories) {

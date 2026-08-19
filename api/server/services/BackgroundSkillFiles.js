@@ -1,124 +1,25 @@
 /**
- * Background skill file collection.
+ * Background skill file-link injection.
  *
  * When execute_skill hits its streaming deadline (PI_SKILL_TIMEOUT_MS), pi
  * keeps executing server-side. pi tracks each /skill: turn as a TaskQueue doc
  * (type 'subagent', sourceConversationId = sessionId) in the shared
  * `taskqueues` collection and flips it to a terminal status when finished.
  *
- * This module watches that doc and, once the skill run finishes, collects the
- * files generated since the turn started, saves them as arp file records and
- * attaches them to the agent's response message — so generated files (e.g. a
- * PPTX exported minutes after the deadline) appear as real message
- * attachments on refresh, and are pushed live via the SSE `attachment` event
- * when the stream is still open.
+ * This module watches that doc and, once the skill run finishes, appends the
+ * canonical pi download links ("📎 下载文件：[📄 name](url)" markdown, built
+ * from collectPiGeneratedFiles + buildPiFileDownloadUrl — identical to the
+ * one-pi chat buildFileLinks surface) onto the agent's saved response message
+ * text, so the links are visible on refresh without any file download or
+ * attachment records.
  *
  * In-memory watcher: lost on process restart (best-effort; files remain
  * retrievable via the pi files API and later turns).
  */
-const fs = require('fs');
-const path = require('path');
-const { v4: uuidv4 } = require('uuid');
 const { logger } = require('@librechat/data-schemas');
 const { TaskQueue } = require('../../models/TaskQueue');
 const { Message } = require('~/db/models');
-const { createFile } = require('~/models');
-const { collectPiGeneratedFiles, filterPiResultFiles, downloadPIFile } = require('./PIService');
-
-const MAX_PI_FILE_SIZE_BYTES = parseInt(process.env.PI_UPLOAD_LIMIT_MB || '1024', 10) * 1024 * 1024;
-
-const pathSeparatorRegex = /[\\/\0]/;
-
-const sanitizeFileName = (name) => path.basename(name).replace(/[\\/:*?"<>|]/g, '_');
-
-/**
- * Download pi-generated files and persist them as arp file records
- * (uploads/<userId>/ + files collection), returning attachment descriptors.
- */
-const downloadAndSavePIFiles = async (generatedFiles, userId) => {
-  if (!generatedFiles || generatedFiles.length === 0) {
-    return [];
-  }
-
-  const savedFiles = [];
-
-  for (const fileInfo of generatedFiles) {
-    try {
-      const downloadResult = await downloadPIFile(
-        {
-          sessionId: fileInfo.sessionId,
-          filename: fileInfo.name,
-          agentId: fileInfo.agentId,
-        },
-        userId,
-      );
-
-      if (!downloadResult.success) {
-        logger.error(
-          `[downloadAndSavePIFiles] Failed to download ${fileInfo.name}: ${downloadResult.error}`,
-        );
-        continue;
-      }
-
-      const buffer = downloadResult.data.buffer;
-      const mimeType =
-        downloadResult.data.mimeType || fileInfo.mimeType || 'application/octet-stream';
-
-      if (buffer.length > MAX_PI_FILE_SIZE_BYTES) {
-        logger.error(
-          `[downloadAndSavePIFiles] File "${fileInfo.name}" (${buffer.length} bytes) exceeds max size of ${MAX_PI_FILE_SIZE_BYTES} bytes`,
-        );
-        continue;
-      }
-
-      if (pathSeparatorRegex.test(userId)) {
-        logger.error(`[downloadAndSavePIFiles] Invalid userId: ${userId}`);
-        continue;
-      }
-
-      const safeName = sanitizeFileName(fileInfo.name);
-      const fileId = uuidv4();
-      const filename = `${fileId}_${safeName}`;
-
-      const uploadPath = path.join('uploads', userId, filename);
-      const uploadDir = path.dirname(uploadPath);
-
-      if (!fs.existsSync(uploadDir)) {
-        fs.mkdirSync(uploadDir, { recursive: true });
-      }
-
-      fs.writeFileSync(uploadPath, buffer);
-
-      await createFile({
-        file_id: fileId,
-        user: userId,
-        filename: fileInfo.name,
-        filepath: `/uploads/${userId}/${filename}`,
-        type: mimeType,
-        bytes: buffer.length,
-        source: 'local',
-        context: 'pi_generated',
-        metadata: {
-          originalName: fileInfo.name,
-          mimeType,
-          size: fileInfo.size,
-        },
-      });
-
-      savedFiles.push({
-        file_id: fileId,
-        filename: fileInfo.name,
-        filepath: `/uploads/${userId}/${filename}`,
-        type: mimeType,
-        size: buffer.length,
-      });
-    } catch (error) {
-      logger.error(`[downloadAndSavePIFiles] Error processing ${fileInfo.name}:`, error);
-    }
-  }
-
-  return savedFiles;
-};
+const { collectPiGeneratedFiles, buildPiFileLinks } = require('./PIService');
 
 const POLL_INTERVAL_MS = 5_000;
 const MAX_WAIT_MS = 30 * 60_000;
@@ -134,7 +35,8 @@ const activeWatchers = new Set();
 
 /**
  * Fire-and-forget: wait for the pi skill task (TaskQueue doc) to finish, then
- * collect/save/attach the files generated during the run.
+ * collect the files generated during the run and append their download links
+ * to the saved response message text (same markdown format as one-pi chat).
  *
  * @param {Object} params
  * @param {string} params.agentId pi agent id
@@ -142,8 +44,7 @@ const activeWatchers = new Set();
  * @param {string} params.userId arp user id
  * @param {string} params.skillName
  * @param {Date|string} params.startedAt turn start cutoff for file mtime filter
- * @param {string} [params.responseMessageId] arp response message to attach files to
- * @param {Function} [params.emitAttachment] optional SSE attachment emitter (live push)
+ * @param {string} [params.responseMessageId] arp response message to append links to
  */
 const scheduleBackgroundSkillFileCollection = async ({
   agentId,
@@ -152,9 +53,8 @@ const scheduleBackgroundSkillFileCollection = async ({
   skillName,
   startedAt,
   responseMessageId,
-  emitAttachment,
 }) => {
-  if (!agentId || !sessionId || !userId) {
+  if (!agentId || !sessionId || !userId || !startedAt || !responseMessageId) {
     return;
   }
 
@@ -203,46 +103,32 @@ const scheduleBackgroundSkillFileCollection = async ({
       }
     }
 
-    const files = filterPiResultFiles(
+    const links = await buildPiFileLinks(
       await collectPiGeneratedFiles(agentId, sessionId, userId, new Date(startedAtMs)),
-      null,
     );
-    if (files.length === 0) {
-      return;
-    }
-
-    const savedFiles = await downloadAndSavePIFiles(
-      files.map((f) => ({
-        sessionId,
-        agentId,
-        name: f.path || f.name,
-        mimeType: f.mimeType,
-        size: f.size,
-      })),
-      userId,
-    );
-    if (savedFiles.length === 0) {
+    if (!links) {
       return;
     }
 
     logger.info(
-      `[BackgroundSkillFiles] Skill ${skillName} finished for ${sessionId}: attaching ${savedFiles.length} file(s)`,
+      `[BackgroundSkillFiles] Skill ${skillName} finished for ${sessionId}: appending file links to message ${responseMessageId}`,
     );
 
-    if (responseMessageId) {
-      try {
-        await Message.findByIdAndUpdate(responseMessageId, {
-          $push: { attachments: { $each: savedFiles } },
-        });
-      } catch (err) {
-        logger.error('[BackgroundSkillFiles] Failed to attach files to message:', err.message);
-      }
-
-      if (emitAttachment) {
-        for (const file of savedFiles) {
-          await emitAttachment({ messageId: responseMessageId, ...file });
-        }
-      }
+    try {
+      await Message.findByIdAndUpdate(responseMessageId, [
+        {
+          $set: {
+            text: {
+              $concat: [
+                { $ifNull: ['$text', ''] },
+                links,
+              ],
+            },
+          },
+        },
+      ]);
+    } catch (err) {
+      logger.error('[BackgroundSkillFiles] Failed to append links to message:', err.message);
     }
   } catch (error) {
     logger.error('[BackgroundSkillFiles] Watcher failed:', error.message);
@@ -252,6 +138,5 @@ const scheduleBackgroundSkillFileCollection = async ({
 };
 
 module.exports = {
-  downloadAndSavePIFiles,
   scheduleBackgroundSkillFileCollection,
 };

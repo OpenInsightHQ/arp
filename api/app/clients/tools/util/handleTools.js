@@ -49,17 +49,111 @@ const { getMCPServerTools } = require('~/server/services/Config');
 const {
   isPIConfigured,
   handlePIToolCall,
+  downloadPIFile,
   buildPiFileDownloadUrl,
 } = require('~/server/services/PIService');
-const {
-  downloadAndSavePIFiles,
-  scheduleBackgroundSkillFileCollection,
-} = require('~/server/services/BackgroundSkillFiles');
+const { scheduleBackgroundSkillFileCollection } = require('~/server/services/BackgroundSkillFiles');
 const { DynamicStructuredTool } = require('@langchain/core/tools');
 const { z } = require('zod');
 const { getRoleByName } = require('~/models/Role');
+const { createFile } = require('~/models');
 const { GallerySqlQuery, GalleryVersion } = require('~/models');
 const { GalleryArtifact } = require('~/models/GalleryArtifact');
+
+const fs = require('fs');
+const path = require('path');
+const { v4: uuidv4 } = require('uuid');
+
+const MAX_PI_FILE_SIZE_BYTES = parseInt(process.env.PI_UPLOAD_LIMIT_MB || '1024', 10) * 1024 * 1024;
+
+const pathSeparatorRegex = /[\\/\0]/;
+
+const sanitizeFileName = (name) => path.basename(name).replace(/[\\/:*?"<>|]/g, '_');
+
+const downloadAndSavePIFiles = async (generatedFiles, userId) => {
+  if (!generatedFiles || generatedFiles.length === 0) {
+    return [];
+  }
+
+  const savedFiles = [];
+
+  for (const fileInfo of generatedFiles) {
+    try {
+      const downloadResult = await downloadPIFile(
+        {
+          sessionId: fileInfo.sessionId,
+          filename: fileInfo.name,
+          agentId: fileInfo.agentId,
+        },
+        userId,
+      );
+
+      if (!downloadResult.success) {
+        logger.error(
+          `[downloadAndSavePIFiles] Failed to download ${fileInfo.name}: ${downloadResult.error}`,
+        );
+        continue;
+      }
+
+      const buffer = downloadResult.data.buffer;
+      const mimeType =
+        downloadResult.data.mimeType || fileInfo.mimeType || 'application/octet-stream';
+
+      if (buffer.length > MAX_PI_FILE_SIZE_BYTES) {
+        logger.error(
+          `[downloadAndSavePIFiles] File "${fileInfo.name}" (${buffer.length} bytes) exceeds max size of ${MAX_PI_FILE_SIZE_BYTES} bytes`,
+        );
+        continue;
+      }
+
+      if (pathSeparatorRegex.test(userId)) {
+        logger.error(`[downloadAndSavePIFiles] Invalid userId: ${userId}`);
+        continue;
+      }
+
+      const safeName = sanitizeFileName(fileInfo.name);
+      const fileId = uuidv4();
+      const filename = `${fileId}_${safeName}`;
+
+      const uploadPath = path.join('uploads', userId, filename);
+      const uploadDir = path.dirname(uploadPath);
+
+      if (!fs.existsSync(uploadDir)) {
+        fs.mkdirSync(uploadDir, { recursive: true });
+      }
+
+      fs.writeFileSync(uploadPath, buffer);
+
+      await createFile({
+        file_id: fileId,
+        user: userId,
+        filename: fileInfo.name,
+        filepath: `/uploads/${userId}/${filename}`,
+        type: mimeType,
+        bytes: buffer.length,
+        source: 'local',
+        context: 'pi_generated',
+        metadata: {
+          originalName: fileInfo.name,
+          mimeType,
+          size: fileInfo.size,
+        },
+      });
+
+      savedFiles.push({
+        file_id: fileId,
+        filename: fileInfo.name,
+        filepath: `/uploads/${userId}/${filename}`,
+        type: mimeType,
+        size: buffer.length,
+      });
+    } catch (error) {
+      logger.error(`[downloadAndSavePIFiles] Error processing ${fileInfo.name}:`, error);
+    }
+  }
+
+  return savedFiles;
+};
 
 const createPITools = (options = {}) => {
   const tools = [];
@@ -401,9 +495,9 @@ Rules:
 
       // Deadline hit: pi keeps executing in the background. Watch the pi skill
       // task (TaskQueue doc) and, when it finishes, collect the files
-      // generated during the run and attach them to the response message so
-      // they appear in the UI (live via SSE while the stream is open,
-      // otherwise on the next message load).
+      // generated during the run and append their canonical pi download links
+      // (collectPiGeneratedFiles + buildPiFileDownloadUrl, same markdown as
+      // the one-pi chat surface) to the saved response message text.
       if (result.success && result.background) {
         scheduleBackgroundSkillFileCollection({
           agentId: effectiveAgentId,
@@ -412,9 +506,8 @@ Rules:
           skillName,
           startedAt: result.data?.startedAt,
           // resolveParentMessageId() reads job.metadata.responseMessageId, i.e.
-          // the in-flight response message the watcher should attach files to
+          // the in-flight response message the watcher should append links to
           responseMessageId: await resolveParentMessageId(),
-          emitAttachment,
         }).catch(() => {
           /* watcher logs its own errors */
         });

@@ -753,6 +753,20 @@ const filterPiResultFiles = (files, text = null) => {
 };
 
 /**
+ * Build the canonical "📎 下载文件：[📄 name](url)" markdown footer from an
+ * already-collected pi file list (collectPiGeneratedFiles output). Shared by
+ * the one-pi chat buildFileLinks surface and BackgroundSkillFiles so both
+ * emit identical link markdown. Returns null when there is nothing to show.
+ */
+const buildPiFileLinks = (files) => {
+  if (!files || files.length === 0) {
+    return null;
+  }
+  const links = files.map((f) => `[📄 ${f.name}](${f.url})`);
+  return '\n\n---\n📎 下载文件：' + links.join('  ');
+};
+
+/**
  * Executes a skill on the PI backend via `/prompt` with a `/skill:${skillName}`
  * message (same trigger format as GallerySkillTaskExecutor), using the current
  * agentId/sessionId/userId. Streams progress via callbacks and returns the
@@ -1111,6 +1125,7 @@ module.exports = {
   handlePIToolCall,
   collectPiGeneratedFiles,
   buildPiFileDownloadUrl,
+  buildPiFileLinks,
   filterPiResultFiles,
   MAX_PI_RESULT_FILES,
   PI_HOST,
