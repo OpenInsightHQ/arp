@@ -46,7 +46,13 @@ const { getUserPluginAuthValue } = require('~/server/services/PluginService');
 const { createMCPTool, createMCPTools } = require('~/server/services/MCP');
 const { loadAuthValues } = require('~/server/services/Tools/credentials');
 const { getMCPServerTools } = require('~/server/services/Config');
-const { isPIConfigured, handlePIToolCall, downloadPIFile } = require('~/server/services/PIService');
+const {
+  isPIConfigured,
+  handlePIToolCall,
+  downloadPIFile,
+  buildPiFileLinks,
+  filterPiResultFiles,
+} = require('~/server/services/PIService');
 const { scheduleBackgroundSkillFileCollection } = require('~/server/services/BackgroundSkillFiles');
 const { DynamicStructuredTool } = require('@langchain/core/tools');
 const { z } = require('zod');
@@ -157,9 +163,25 @@ const createPITools = (options = {}) => {
     return tools;
   }
 
-  const { streamId, res, agentId, conversationId, userId } = options;
+  const { streamId, res, req, agentId, conversationId, userId } = options;
   const effectiveAgentId = agentId || 'default';
   const sessionId = conversationId || undefined;
+
+  /**
+   * Stash the canonical pi file-links footer (same "📎 下载文件" markdown as
+   * the one-pi chat surface) on the request so the controller appends it to
+   * the final response message text before saving — file links must not
+   * depend on the LLM relaying them from the collapsed tool output.
+   */
+  const stagePiFileLinks = (files, text) => {
+    if (!req || !Array.isArray(files) || files.length === 0) {
+      return;
+    }
+    const links = buildPiFileLinks(filterPiResultFiles(files, text || null));
+    if (links) {
+      req._piFileLinksText = (req._piFileLinksText || '') + links;
+    }
+  };
 
   /**
    * Resolve the current message-tree leaf for pi-side persistence.
@@ -353,6 +375,11 @@ Rules:
       // in the attachment area with working download links instead of living
       // only in the collapsed tool output.
       if (result.success && !result.background && result.data?.files?.length > 0) {
+        // Also stage the canonical pi download-links footer so the controller
+        // appends it to the final response text (same surface as one-pi chat) —
+        // links must not depend on the LLM relaying them.
+        stagePiFileLinks(result.data.files, result.data.output);
+
         const skillFiles = result.data.files
           .filter((f) => f.path || f.name)
           .map((f) => ({
@@ -616,6 +643,7 @@ const loadTools = async ({
     ? createPITools({
         streamId: options.req?._resumableStreamId,
         res: options.res,
+        req: options.req,
         agentId: agent?.id,
         conversationId: options.conversationId,
         userId: typeof user === 'string' ? user : (user?.id ?? options.req?.user?.id),

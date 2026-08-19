@@ -327,6 +327,15 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
         // This prevents race conditions where the client sends a follow-up message
         // before the response is saved to the database, causing orphaned parentMessageIds.
         if (client.savedMessageIds && !client.savedMessageIds.has(messageId)) {
+          // Append staged pi file-links footer (collectPiGeneratedFiles +
+          // buildPiFileDownloadUrl, staged by execute_skill) to the response
+          // text — same surface as the one-pi chat buildFileLinks, so download
+          // links are visible in the message body regardless of whether the
+          // LLM relayed them from the collapsed tool output.
+          if (req._piFileLinksText) {
+            response.text = (response.text || '') + req._piFileLinksText;
+            delete req._piFileLinksText;
+          }
           await saveMessage(
             req,
             {
