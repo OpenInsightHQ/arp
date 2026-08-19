@@ -21,6 +21,15 @@ export function buildTree({
     if (!message) {
       return;
     }
+    // Hide machine-injected / subagent messages from the rendered tree.
+    // The server message routes already filter these; this is a client-side
+    // safety net for messages that arrive via realtime paths (SSE handlers,
+    // cached queries) before server filtering applies. Hidden turns hide
+    // every message in the chain, so filtered nodes have no visible children.
+    const meta = message.metadata as Record<string, unknown> | undefined;
+    if (meta?.hiddenFromTree === true || meta?.isSubagentTrace === true) {
+      return;
+    }
     const parentId = message.parentMessageId ?? '';
     childrenCount[parentId] = (childrenCount[parentId] || 0) + 1;
 
