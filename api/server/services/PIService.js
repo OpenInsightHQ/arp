@@ -988,7 +988,7 @@ Supported file types: docx, xlsx, pptx, pdf, txt, md, json, yaml, js, ts, py, ht
       function: {
         name: 'execute_skill',
         description:
-          'Execute a registered skill by name. Only use skills listed in the <available_skills> section. Pass the user request in the input parameter exactly as stated.',
+          "Execute a registered skill by name. Only use skills listed in the <available_skills> section. Pass the user request in the input parameter exactly as stated. If the skill output asks for confirmation, options, or any user decision, relay the full options in your visible reply and stop to wait for the user's answer — never confirm or choose on the user's behalf, and never re-invoke the skill before the user has explicitly responded.",
         parameters: {
           type: 'object',
           properties: {

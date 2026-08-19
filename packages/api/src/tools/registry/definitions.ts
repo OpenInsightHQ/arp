@@ -684,7 +684,8 @@ Use this tool when the user's request matches one of the skills listed in the <a
 Rules:
 - skillName MUST be one of the names listed in <available_skills>.
 - Pass the user's request in 'input' exactly as stated, without interpretation or restructuring.
-- The skill runs asynchronously and returns its final output and any generated files.`,
+- The skill runs asynchronously and returns its final output and any generated files.
+- If the skill output asks for confirmation, options, or any user decision (e.g. ending with a question or a list of choices to confirm): you MUST relay the full options/choices in your visible reply and STOP to wait for the user's answer. NEVER answer, confirm, or choose on the user's behalf, and NEVER proceed to a follow-up skill call in the same turn. Only re-invoke the skill after the user has explicitly responded.`,
     schema: piExecuteSkillSchema,
     toolType: 'builtin',
     responseFormat: 'content',
