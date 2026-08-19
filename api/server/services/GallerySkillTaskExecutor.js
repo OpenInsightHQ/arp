@@ -99,10 +99,12 @@ const executePiSkillTask = async (task, conversationId) => {
     }
   }
 
-  // Shared filtering (same rules as one-pi chat file links): dedupe by
-  // basename, cap at 10 files.
+  // Shared filtering (identical to one-pi chat file links): text-mention
+  // filter against the completed output, basename dedupe, cap at 10.
+  // The stream has fully drained here, so textOutput is complete.
   const files = filterPiResultFiles(
     await collectPiGeneratedFiles(agentId, sessionId, task.userId, task._startedAt),
+    textOutput,
   );
   return { agentId, sessionId, conversationId, message, textOutput, files };
 };
