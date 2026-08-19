@@ -359,6 +359,17 @@ PI will handle the file operation automatically - it can create new documents, m
     }
 
     const data = result.data;
+
+    // Deadline reached: pi keeps running in the background; the note tells
+    // the agent to wrap up the turn instead of waiting.
+    if (result.background && data.note) {
+      let partial = '';
+      if (data.output) {
+        partial = `Partial output streamed so far:\n${data.output.slice(-2000)}\n\n`;
+      }
+      return `${partial}${data.note}`;
+    }
+
     let output = data.output || data.message || '';
 
     if (data.files && data.files.length > 0) {

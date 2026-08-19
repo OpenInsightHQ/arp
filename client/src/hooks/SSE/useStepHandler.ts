@@ -602,7 +602,7 @@ export default function useStepHandler({
           content?: string;
         };
 
-        let responseMessageId = submission?.initialResponse?.messageId ?? '';
+        const responseMessageId = submission?.initialResponse?.messageId ?? '';
         if (!responseMessageId) {
           console.warn('[useStepHandler] No message id found in pi_thinking event');
           return;
@@ -691,7 +691,7 @@ export default function useStepHandler({
           isError?: boolean;
         };
 
-        let responseMessageId = submission?.initialResponse?.messageId ?? '';
+        const responseMessageId = submission?.initialResponse?.messageId ?? '';
         if (!responseMessageId) {
           console.warn('[useStepHandler] No message id found in pi_tool event');
           return;
@@ -788,6 +788,80 @@ export default function useStepHandler({
         existingContent[toolCallIndex] = {
           type: ContentTypes.TOOL_CALL,
           tool_call: updatedToolCall,
+        } as TMessageContentParts;
+
+        const updatedResponse = { ...response, content: existingContent };
+        messageMap.current.set(responseMessageId, updatedResponse);
+        const currentMessages = getMessages() || [];
+        setMessages([...currentMessages.slice(0, -1), updatedResponse]);
+      } else if (event === 'pi_stream') {
+        // Live text output from a skill executing inside pi (sync streaming
+        // phase of execute_skill). Append to a TEXT content part so the user
+        // sees skill output while the tool call is still running.
+        const streamData = data as { content?: string };
+        const delta = streamData?.content;
+        if (!delta) {
+          return;
+        }
+
+        const responseMessageId = submission?.initialResponse?.messageId ?? '';
+        if (!responseMessageId) {
+          console.warn('[useStepHandler] No message id found in pi_stream event');
+          return;
+        }
+
+        let response = messageMap.current.get(responseMessageId);
+        if (!response) {
+          const lastMessage = messages[messages.length - 1] as TMessage;
+          const responseMessage =
+            lastMessage && !lastMessage.isCreatedByUser
+              ? lastMessage
+              : (submission?.initialResponse as TMessage);
+
+          response = {
+            ...responseMessage,
+            parentMessageId,
+            conversationId: userMessage.conversationId,
+            messageId: responseMessageId,
+            content: responseMessage?.content ?? [],
+          };
+
+          messageMap.current.set(responseMessageId, response);
+
+          const freshMessages = getMessages() || [];
+          const currentMessages = freshMessages.length > messages.length ? freshMessages : messages;
+
+          let updatedMessages = currentMessages.filter((m) => m.messageId !== responseMessageId);
+
+          if (!updatedMessages.some((m) => m.messageId === userMessage.messageId)) {
+            updatedMessages = [...updatedMessages, userMessage as TMessage];
+          }
+
+          setMessages([...updatedMessages, response]);
+        }
+
+        // Find the last TEXT part; create one if none exists yet
+        const existingContent = [...(response.content || [])] as TMessageContentParts[];
+        let textIndex = -1;
+        for (let i = existingContent.length - 1; i >= 0; i--) {
+          if (existingContent[i].type === ContentTypes.TEXT) {
+            textIndex = i;
+            break;
+          }
+        }
+
+        if (textIndex === -1) {
+          textIndex = existingContent.length;
+          existingContent.push({ type: ContentTypes.TEXT, text: '' } as TMessageContentParts);
+        }
+
+        const currentTextPart = existingContent[textIndex] as {
+          type: typeof ContentTypes.TEXT;
+          text: string;
+        };
+        existingContent[textIndex] = {
+          type: ContentTypes.TEXT,
+          text: (currentTextPart.text ?? '') + delta,
         } as TMessageContentParts;
 
         const updatedResponse = { ...response, content: existingContent };

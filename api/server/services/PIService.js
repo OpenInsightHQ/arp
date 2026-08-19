@@ -714,6 +714,14 @@ const executeSkill = async (
   const message = buildSkillMessage(skillName, input);
   const startedAt = new Date();
 
+  // Skills commonly run for minutes. Stream live output up to a deadline,
+  // then stop reading and let pi finish in the background (pi's /prompt has
+  // no disconnect abort): its messages still persist at parentMessageId and
+  // the skill task (created by pi for /skill: turns) keeps updating the task
+  // panel. 0 disables the deadline (wait forever).
+  const deadlineMs = Number(process.env.PI_SKILL_TIMEOUT_MS ?? 60_000);
+  let timedOut = false;
+
   try {
     const response = await fetch(`${PI_HOST}/prompt`, {
       method: 'POST',
@@ -749,11 +757,22 @@ const executeSkill = async (
     let currentEvent = null;
 
     while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
+      const readPromise = reader.read();
+      const result = await (deadlineMs > 0
+        ? Promise.race([
+            readPromise,
+            new Promise((resolve) => setTimeout(() => resolve({ __timeout: true }), deadlineMs)),
+          ]).then((r) => r)
+        : readPromise);
+
+      if (result.__timeout) {
+        timedOut = true;
         break;
       }
-      buffer += decoder.decode(value, { stream: true });
+      if (result.done) {
+        break;
+      }
+      buffer += decoder.decode(result.value, { stream: true });
       const lines = buffer.split('\n');
       buffer = lines.pop() || '';
 
@@ -802,6 +821,30 @@ const executeSkill = async (
           }
         }
       }
+    }
+
+    if (timedOut) {
+      // Abandon the stream; pi keeps executing server-side.
+      try {
+        await reader.cancel();
+      } catch {
+        /* socket already gone */
+      }
+      logger.info(
+        `[PIService] executeSkill deadline (${deadlineMs}ms) reached for ${skillName}; continuing in background`,
+      );
+      return {
+        success: true,
+        background: true,
+        data: {
+          skillName,
+          message,
+          output,
+          note: `Skill "${skillName}" is still running in the background (over ${Math.round(deadlineMs / 1000)}s). ` +
+            'Its output and generated files will appear in the conversation and the task panel when it finishes. ' +
+            'Tell the user it is in progress and finish your turn without waiting.',
+        },
+      };
     }
 
     const files = await collectSkillFiles(finalAgentId, sessionId, userId, startedAt);
