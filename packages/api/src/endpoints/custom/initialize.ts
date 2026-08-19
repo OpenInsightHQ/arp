@@ -183,6 +183,7 @@ export async function initializeCustom({
       getLangFromReq(req),
       bodyMessageId,
       derivedResponseMessageId,
+      req.body?.parentMessageId as string | undefined,
     ),
   };
 

@@ -227,6 +227,26 @@ router.post('/chat/abort', async (req, res) => {
 
     logger.debug(`[AgentStream] Job found, aborting: ${jobStreamId}`);
     const abortResult = await GenerationJobManager.abortJob(jobStreamId);
+
+    // pi conversations: stop the pi-side session too. The streamFromPI proxy
+    // deliberately lets pi continue across plain disconnects (resume support),
+    // so this endpoint - where a stop is unambiguous - is the only reliable
+    // place to signal pi. Fire-and-forget: pi replies instantly (signal only).
+    if (process.env.PI_HOST && process.env.PI_API_KEY) {
+      const piSessionId = abortResult.jobData?.conversationId || jobStreamId;
+      fetch(`${process.env.PI_HOST}/abort`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'api-key': process.env.PI_API_KEY,
+          'X-User-Id': String(userId),
+        },
+        body: JSON.stringify({ sessionId: piSessionId }),
+      }).catch((err) => {
+        logger.warn(`[AgentStream] pi /abort call failed (non-pi conversations 404 harmlessly): ${err.message}`);
+      });
+    }
+
     logger.debug(`[AgentStream] Job aborted successfully: ${jobStreamId}`, {
       abortResultSuccess: abortResult.success,
       abortResultUserMessageId: abortResult.jobData?.userMessage?.messageId,

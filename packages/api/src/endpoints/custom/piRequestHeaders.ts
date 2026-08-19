@@ -4,6 +4,7 @@ function buildPiForwardHeaders(
   lang?: string,
   userMessageId?: string,
   responseMessageId?: string,
+  parentMessageId?: string,
 ) {
   return {
     ...(existingHeaders || {}),
@@ -11,6 +12,10 @@ function buildPiForwardHeaders(
     ...(lang ? { 'Accept-Language': lang } : {}),
     ...(userMessageId ? { 'X-User-Message-Id': userMessageId } : {}),
     ...(responseMessageId ? { 'X-Response-Message-Id': responseMessageId } : {}),
+    // Message-tree mount point known to the frontend. Forwarded so pi pins
+    // persistence to the correct parent instead of inferring "last message"
+    // (which can race/fork the tree, e.g. after an aborted turn).
+    ...(parentMessageId ? { 'X-Parent-Message-Id': parentMessageId } : {}),
   };
 }
 

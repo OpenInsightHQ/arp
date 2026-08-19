@@ -619,7 +619,7 @@ async function runNonStreamingPI({ finalUserMessage, agentId, sessionId, userId,
   }
 }
 
-async function streamFromPI({ res, chatId, created, finalUserMessage, agentId, sessionId, userId, streamStartTime, systemPrompt, userMessageId, responseMessageId }) {
+async function streamFromPI({ res, chatId, created, finalUserMessage, agentId, sessionId, userId, streamStartTime, systemPrompt, userMessageId, responseMessageId, parentMessageId }) {
   setSseHeaders(res);
   writeSseChunk(res, buildChunk(chatId, created, { role: 'assistant', content: '' }));
 
@@ -858,6 +858,9 @@ const piChatCompletionsController = async (req, res) => {
   const sessionId = conversationId || 'new';
   const userMessageId = req.headers['x-user-message-id'] || undefined;
   const responseMessageId = req.headers['x-response-message-id'] || undefined;
+  // Frontend-known message-tree mount point; forwarded to pi so persistence
+  // pins to the correct parent instead of inferring "last message".
+  const parentMessageId = req.headers['x-parent-message-id'] || undefined;
 
   const solidHandled = await handleSolidificationRequest({
     userMessage,
@@ -884,6 +887,9 @@ const piChatCompletionsController = async (req, res) => {
       res,
       streamStartTime,
       systemPrompt,
+      userMessageId,
+      responseMessageId,
+      parentMessageId,
     });
   }
 
@@ -902,6 +908,7 @@ const piChatCompletionsController = async (req, res) => {
     systemPrompt,
     userMessageId,
     responseMessageId,
+    parentMessageId,
   });
 };
 
