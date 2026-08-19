@@ -824,12 +824,23 @@ const executeSkill = async (
 
     while (true) {
       const readPromise = reader.read();
-      const result = await (deadlineMs > 0
-        ? Promise.race([
-            readPromise,
-            new Promise((resolve) => setTimeout(() => resolve({ __timeout: true }), deadlineMs)),
-          ]).then((r) => r)
-        : readPromise);
+      let result;
+      if (deadlineMs > 0) {
+        // Idle timeout: the timer is per-read and cleared once the race
+        // settles, so continuous output keeps resetting it and losing timers
+        // don't pile up for the full deadlineMs window.
+        let timer;
+        const timeoutPromise = new Promise((resolve) => {
+          timer = setTimeout(() => resolve({ __timeout: true }), deadlineMs);
+        });
+        try {
+          result = await Promise.race([readPromise, timeoutPromise]);
+        } finally {
+          clearTimeout(timer);
+        }
+      } else {
+        result = await readPromise;
+      }
 
       if (result.__timeout) {
         timedOut = true;
