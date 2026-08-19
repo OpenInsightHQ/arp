@@ -102,6 +102,14 @@ const initializeClient = async ({ req, res, signal, endpointOption }) => {
   const collectedUsage = [];
   /** @type {ArtifactPromises} */
   const artifactPromises = [];
+  /**
+   * Expose the artifact promises array to in-request tool loaders (e.g.
+   * createPITools) so tool-generated file attachments are not only streamed
+   * live via SSE but also persisted onto the response message
+   * (BaseClient.sendMessage merges artifactPromises into
+   * responseMessage.attachments before saving).
+   */
+  req._agentArtifactPromises = artifactPromises;
   const { contentParts, aggregateContent } = createContentAggregator();
   const timestampTracker = createTimestampTracker();
   const toolEndCallback = createToolEndCallback({ req, res, artifactPromises, streamId });
