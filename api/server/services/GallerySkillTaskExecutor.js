@@ -7,6 +7,7 @@ const {
   generateGallerySkillTaskRunId,
 } = require('../../models/GallerySkillTaskRun');
 const { Conversation } = require('~/db/models');
+const { collectPiGeneratedFiles } = require('~/server/services/PIService');
 
 const PI_HOST = process.env.PI_HOST || process.env.PI_AGENT_URL || 'http://localhost:3000';
 const PI_API_KEY = process.env.PI_API_KEY || 'testkey';
@@ -24,43 +25,6 @@ const buildSkillTaskMessage = (task) => {
 
   const parameterText = entries.map(([key, value]) => `- ${key}: ${value}`).join('\n');
   return `/skill:${task.skillName}\n\n本次任务参数：\n${parameterText}`;
-};
-
-const collectPiFiles = async (agentId, sessionId, userId, modifiedSince) => {
-  if (!agentId || !sessionId) {
-    return [];
-  }
-
-  try {
-    let url = `${PI_HOST}/files?agentId=${encodeURIComponent(agentId)}&sessionId=${encodeURIComponent(sessionId)}&recursive=true`;
-    if (modifiedSince) {
-      url += `&modifiedSince=${encodeURIComponent(new Date(modifiedSince).toISOString())}`;
-    }
-
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: { 'api-key': PI_API_KEY, 'X-User-Id': String(userId) },
-    });
-
-    if (!response.ok) {
-      logger.warn('[GallerySkillTaskExecutor] PI files API returned', { status: response.status });
-      return [];
-    }
-
-    const data = await response.json();
-    const files = (data.files || []).filter((f) => !f.isDirectory);
-
-    return files.map((f) => ({
-      name: (f.path || f.name || '').split('/').pop(),
-      path: f.path || f.name,
-      url: `/arp/api/pi/files/download?agentId=${encodeURIComponent(agentId)}&sessionId=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(f.path || f.name)}`,
-      mimeType: f.mimeType || null,
-      size: f.size || null,
-    }));
-  } catch (error) {
-    logger.warn('[GallerySkillTaskExecutor] Failed to collect PI files', { error: error.message });
-    return [];
-  }
 };
 
 const createSkillTaskConversation = (task, runId) => {
@@ -135,7 +99,7 @@ const executePiSkillTask = async (task, conversationId) => {
     }
   }
 
-  const files = await collectPiFiles(agentId, sessionId, task.userId, task._startedAt);
+  const files = await collectPiGeneratedFiles(agentId, sessionId, task.userId, task._startedAt);
   return { agentId, sessionId, conversationId, message, textOutput, files };
 };
 

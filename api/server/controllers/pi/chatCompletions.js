@@ -18,49 +18,17 @@ const {
   appendGalleryVersion,
   upsertGallerySqlQueries,
 } = require('~/server/services/Artifacts/galleryPublishing');
+const { collectPiGeneratedFiles } = require('~/server/services/PIService');
 
 const PI_HOST = process.env.PI_HOST || process.env.PI_AGENT_URL || 'http://localhost:3000';
 const PI_API_KEY = process.env.PI_API_KEY || 'testkey';
-
-async function getRealFiles(agentId, sessionId, userId, modifiedSince) {
-  if (!agentId || !sessionId) return [];
-
-  try {
-    let url = `${PI_HOST}/files?agentId=${encodeURIComponent(String(agentId))}&sessionId=${encodeURIComponent(String(sessionId))}&recursive=true`;
-    if (modifiedSince) {
-      url += `&modifiedSince=${encodeURIComponent(new Date(modifiedSince).toISOString())}`;
-    }
-
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: { 'api-key': PI_API_KEY, 'X-User-Id': userId || 'system' },
-    });
-
-    if (!response.ok) {
-      console.warn('[buildFileLinks] PI files API returned', response.status);
-      return [];
-    }
-
-    const data = await response.json();
-    const files = data.files || [];
-    const realFiles = files
-      .filter((f) => !f.isDirectory)
-      .map((f) => ({ path: f.path || f.name, lastModified: f.lastModified || '' }));
-
-    console.log('[buildFileLinks] getRealFiles found', realFiles.length, 'files (recursive, modifiedSince:', modifiedSince, ')');
-    return realFiles;
-  } catch (err) {
-    console.error('[buildFileLinks] getRealFiles failed:', err.message);
-    return [];
-  }
-}
 
 const MAX_FILE_LINKS = 10;
 
 async function buildFileLinks(text, agentId, sessionId, userId, startTime) {
   if (!text || !agentId || !sessionId) return null;
 
-  const realFiles = await getRealFiles(agentId, sessionId, userId, startTime);
+  const realFiles = await collectPiGeneratedFiles(agentId, sessionId, userId, startTime);
 
   if (realFiles.length === 0) {
     console.log('[buildFileLinks] No real files found, skipping link injection');

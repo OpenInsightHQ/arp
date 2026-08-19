@@ -651,7 +651,16 @@ const buildSkillMessage = (skillName, input) => {
   return `/skill:${skillName}\n\n${trimmedInput}`;
 };
 
-const collectSkillFiles = async (agentId, sessionId, userId, modifiedSince) => {
+/**
+ * List files generated in a pi session (recursive, optionally filtered by
+ * mtime) as structured records with download URLs.
+ *
+ * Single shared implementation for all pi file-collection consumers:
+ * - execute_skill tool results (files attached to the agent message)
+ * - GallerySkillTaskRun.files
+ * - one-pi chat buildFileLinks
+ */
+const collectPiGeneratedFiles = async (agentId, sessionId, userId, modifiedSince) => {
   if (!agentId || !sessionId) {
     return [];
   }
@@ -664,11 +673,11 @@ const collectSkillFiles = async (agentId, sessionId, userId, modifiedSince) => {
 
     const response = await fetch(url, {
       method: 'GET',
-      headers: { 'api-key': PI_API_KEY, 'X-User-Id': String(userId) },
+      headers: { 'api-key': PI_API_KEY, 'X-User-Id': String(userId ?? 'system') },
     });
 
     if (!response.ok) {
-      logger.warn('[PIService] collectSkillFiles: PI files API returned', {
+      logger.warn('[PIService] collectPiGeneratedFiles: PI files API returned', {
         status: response.status,
       });
       return [];
@@ -685,10 +694,13 @@ const collectSkillFiles = async (agentId, sessionId, userId, modifiedSince) => {
         size: f.size || null,
       }));
   } catch (error) {
-    logger.warn('[PIService] collectSkillFiles failed:', { error: error.message });
+    logger.warn('[PIService] collectPiGeneratedFiles failed:', { error: error.message });
     return [];
   }
 };
+
+/** Backwards-compatible alias for existing executeSkill call sites. */
+const collectSkillFiles = collectPiGeneratedFiles;
 
 /**
  * Executes a skill on the PI backend via `/prompt` with a `/skill:${skillName}`
@@ -723,10 +735,11 @@ const executeSkill = async (
   let timedOut = false;
 
   try {
-    // /execute-agent-skill: when the outer agent's exact system prompt is
-    // available it is used VERBATIM (pi adds nothing). Without one (e.g.
-    // no job metadata), fall back to append mode with pi.system.
-    const useAgentPrompt = typeof agentSystemPrompt === 'string' && agentSystemPrompt.trim().length > 0;
+    // /execute-agent-skill: the outer agent's system prompt is APPENDED to
+    // pi's base prompt (pi keeps its tool catalog and the DMP suffix). Without
+    // one (e.g. no job metadata), fall back to pi.system.
+    const useAgentPrompt =
+      typeof agentSystemPrompt === 'string' && agentSystemPrompt.trim().length > 0;
     const response = await fetch(`${PI_HOST}/execute-agent-skill`, {
       method: 'POST',
       headers: {
@@ -1034,6 +1047,7 @@ module.exports = {
   isArtifactRequest,
   getToolDefinitions,
   handlePIToolCall,
+  collectPiGeneratedFiles,
   PI_HOST,
   PI_API_KEY,
 };
