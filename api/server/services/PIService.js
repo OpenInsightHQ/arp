@@ -741,6 +741,9 @@ const executeSkill = async (
         // "last message" - prevents forking the LibreChat message tree when
         // the skill runs as a tool call before the agent's own reply persists.
         parentMessageId,
+        // Skill-execution mode: pi hides the <available_skills> catalog for
+        // this turn so the model cannot see/attempt other skills.
+        skillExecution: true,
       }),
     });
 
@@ -824,7 +827,10 @@ const executeSkill = async (
     }
 
     if (timedOut) {
-      // Abandon the stream; pi keeps executing server-side.
+      // Abandon the stream; pi keeps executing server-side. Collect files
+      // produced so far so the turn's tool output can still reference them;
+      // files generated after this point appear in the conversation (pi
+      // persists its messages) and via the pi files API on later turns.
       try {
         await reader.cancel();
       } catch {
@@ -833,6 +839,7 @@ const executeSkill = async (
       logger.info(
         `[PIService] executeSkill deadline (${deadlineMs}ms) reached for ${skillName}; continuing in background`,
       );
+      const filesSoFar = await collectSkillFiles(finalAgentId, sessionId, userId, startedAt);
       return {
         success: true,
         background: true,
@@ -840,7 +847,9 @@ const executeSkill = async (
           skillName,
           message,
           output,
-          note: `Skill "${skillName}" is still running in the background (over ${Math.round(deadlineMs / 1000)}s). ` +
+          files: filesSoFar,
+          note:
+            `Skill "${skillName}" is still running in the background (over ${Math.round(deadlineMs / 1000)}s). ` +
             'Its output and generated files will appear in the conversation and the task panel when it finishes. ' +
             'Tell the user it is in progress and finish your turn without waiting.',
         },

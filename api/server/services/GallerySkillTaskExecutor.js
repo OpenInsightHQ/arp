@@ -96,6 +96,9 @@ const executePiSkillTask = async (task, conversationId) => {
       cwd: null,
       stream: true,
       systemPrompt: await getPiSystemPrompt(),
+      // Skill-execution mode: hide the <available_skills> catalog so the
+      // scheduled run only exercises its own skill, never neighbors.
+      skillExecution: true,
     }),
   });
 
