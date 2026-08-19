@@ -180,6 +180,24 @@ const createPITools = (options = {}) => {
     }
   };
 
+  /**
+   * Resolve the outer agent's exact system prompt (stashed on the generation
+   * job at sendMessage time). execute_skill forwards it to pi's
+   * /execute-agent-skill so the skill runs under the agent's verbatim prompt.
+   */
+  const resolveAgentSystemPrompt = async () => {
+    if (!streamId) {
+      return undefined;
+    }
+    try {
+      const job = await GenerationJobManager.getJob(streamId);
+      return job?.metadata?.agentSystemPrompt || undefined;
+    } catch (err) {
+      logger.debug('[PITools] Failed to resolve agentSystemPrompt from job:', err.message);
+      return undefined;
+    }
+  };
+
   logger.info(
     `[createPITools] streamId: ${streamId || 'NOT SET'}, agentId: ${effectiveAgentId}, sessionId: ${sessionId || 'not set'}`,
   );
@@ -437,6 +455,7 @@ Rules:
           agentId: effectiveAgentId,
           sessionId,
           parentMessageId: await resolveParentMessageId(),
+          agentSystemPrompt: await resolveAgentSystemPrompt(),
         },
         onChunk,
         onThinking,

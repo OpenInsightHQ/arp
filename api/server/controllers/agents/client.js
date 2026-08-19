@@ -1085,6 +1085,28 @@ ${historyString}`;
           name: a?.name,
           provider: a?.provider,
         }));
+
+        // Stash the primary agent's final system prompt (instructions +
+        // additional_instructions, as assembled for the graph's system
+        // message) on the generation job. execute_skill reads it so the
+        // skill runs under the agent's EXACT prompt via pi's
+        // /execute-agent-skill endpoint. Best-effort: skill execution falls
+        // back to append mode when absent.
+        const streamIdForPrompt = this.options.req?._resumableStreamId;
+        if (streamIdForPrompt) {
+          const agentSystemPrompt = [
+            primaryAgent?.instructions,
+            primaryAgent?.additional_instructions,
+          ]
+            .filter(Boolean)
+            .join('\n\n')
+            .trim();
+          if (agentSystemPrompt) {
+            GenerationJobManager.updateMetadata(streamIdForPrompt, { agentSystemPrompt }).catch(
+              () => {},
+            );
+          }
+        }
       } catch (metaErr) {
         logger.warn(
           '[api/server/controllers/agents/client.js #chatCompletion] Failed to capture agents for summary',

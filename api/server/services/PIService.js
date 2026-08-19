@@ -697,7 +697,7 @@ const collectSkillFiles = async (agentId, sessionId, userId, modifiedSince) => {
  * collected output plus files generated during the run.
  */
 const executeSkill = async (
-  { skillName, input, agentId, sessionId, parentMessageId },
+  { skillName, input, agentId, sessionId, parentMessageId, agentSystemPrompt },
   onChunk,
   onThinking,
   onToolEvent,
@@ -723,7 +723,11 @@ const executeSkill = async (
   let timedOut = false;
 
   try {
-    const response = await fetch(`${PI_HOST}/prompt`, {
+    // /execute-agent-skill: when the outer agent's exact system prompt is
+    // available it is used VERBATIM (pi adds nothing). Without one (e.g.
+    // no job metadata), fall back to append mode with pi.system.
+    const useAgentPrompt = typeof agentSystemPrompt === 'string' && agentSystemPrompt.trim().length > 0;
+    const response = await fetch(`${PI_HOST}/execute-agent-skill`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -731,19 +735,15 @@ const executeSkill = async (
         'X-User-Id': String(userId),
       },
       body: JSON.stringify({
-        message,
+        skillName,
+        input: input || '',
         agentId: finalAgentId,
         sessionId,
-        cwd: null,
         stream: true,
-        systemPrompt: await getPiSystemPrompt(),
-        // Mount pi's messages at the outer agent's in-flight reply instead of
-        // "last message" - prevents forking the LibreChat message tree when
-        // the skill runs as a tool call before the agent's own reply persists.
         parentMessageId,
-        // Skill-execution mode: pi hides the <available_skills> catalog for
-        // this turn so the model cannot see/attempt other skills.
-        skillExecution: true,
+        ...(useAgentPrompt
+          ? { agentSystemPrompt }
+          : { fallbackSystemPrompt: await getPiSystemPrompt() }),
       }),
     });
 
@@ -946,7 +946,7 @@ Supported file types: docx, xlsx, pptx, pdf, txt, md, json, yaml, js, ts, py, ht
 };
 
 const handlePIToolCall = async (
-  { name, arguments: args, sessionId, cwd, agentId, parentMessageId },
+  { name, arguments: args, sessionId, cwd, agentId, parentMessageId, agentSystemPrompt },
   onChunk,
   onThinking,
   onToolEvent,
@@ -979,6 +979,7 @@ const handlePIToolCall = async (
         agentId: finalAgentId,
         sessionId,
         parentMessageId,
+        agentSystemPrompt,
       },
       onChunk,
       onThinking,
