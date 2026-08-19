@@ -697,7 +697,7 @@ const collectSkillFiles = async (agentId, sessionId, userId, modifiedSince) => {
  * collected output plus files generated during the run.
  */
 const executeSkill = async (
-  { skillName, input, agentId, sessionId },
+  { skillName, input, agentId, sessionId, parentMessageId },
   onChunk,
   onThinking,
   onToolEvent,
@@ -729,6 +729,10 @@ const executeSkill = async (
         cwd: null,
         stream: true,
         systemPrompt: await getPiSystemPrompt(),
+        // Mount pi's messages at the outer agent's in-flight reply instead of
+        // "last message" - prevents forking the LibreChat message tree when
+        // the skill runs as a tool call before the agent's own reply persists.
+        parentMessageId,
       }),
     });
 
@@ -890,7 +894,7 @@ Supported file types: docx, xlsx, pptx, pdf, txt, md, json, yaml, js, ts, py, ht
 };
 
 const handlePIToolCall = async (
-  { name, arguments: args, sessionId, cwd, agentId },
+  { name, arguments: args, sessionId, cwd, agentId, parentMessageId },
   onChunk,
   onThinking,
   onToolEvent,
@@ -922,6 +926,7 @@ const handlePIToolCall = async (
         input: args.input || args.request || '',
         agentId: finalAgentId,
         sessionId,
+        parentMessageId,
       },
       onChunk,
       onThinking,

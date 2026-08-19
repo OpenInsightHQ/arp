@@ -160,6 +160,26 @@ const createPITools = (options = {}) => {
   const effectiveAgentId = agentId || 'default';
   const sessionId = conversationId || undefined;
 
+  /**
+   * Resolve the current message-tree leaf for pi-side persistence.
+   * At tool-execution time the outer agent's reply for this turn is not yet
+   * saved, so pi must mount its messages under the in-flight responseMessageId
+   * (stored in the generation job metadata by onStart) instead of guessing
+   * "last message" — otherwise the pi subtree forks the message tree.
+   */
+  const resolveParentMessageId = async () => {
+    if (!streamId) {
+      return undefined;
+    }
+    try {
+      const job = await GenerationJobManager.getJob(streamId);
+      return job?.metadata?.responseMessageId || undefined;
+    } catch (err) {
+      logger.debug('[PITools] Failed to resolve responseMessageId from job:', err.message);
+      return undefined;
+    }
+  };
+
   logger.info(
     `[createPITools] streamId: ${streamId || 'NOT SET'}, agentId: ${effectiveAgentId}, sessionId: ${sessionId || 'not set'}`,
   );
@@ -405,6 +425,7 @@ Rules:
           arguments: { skillName, input },
           agentId: effectiveAgentId,
           sessionId,
+          parentMessageId: await resolveParentMessageId(),
         },
         onChunk,
         onThinking,

@@ -53,7 +53,10 @@ router.get('/', async (req, res) => {
         user: user,
         // Exclude subagent trace messages (they share the conversationId but
         // belong to isolated subagent executions, not the visible chat tree)
+        // and messages hidden from the tree (internal /skill: injections,
+        // task_responses context blocks).
         'metadata.isSubagentTrace': { $ne: true },
+        'metadata.hiddenFromTree': { $ne: true },
       };
       if (cursor) {
         filter[sortField] = sortOrder === 1 ? { $gt: cursor } : { $lt: cursor };
@@ -294,6 +297,7 @@ router.get('/:conversationId', validateMessageReq, async (req, res) => {
       {
         conversationId,
         'metadata.isSubagentTrace': { $ne: true },
+        'metadata.hiddenFromTree': { $ne: true },
       },
       '-_id -__v -user',
     );
