@@ -68,7 +68,7 @@ const createPITools = (options = {}) => {
     return tools;
   }
 
-  const { streamId, res, agentId, conversationId, userId, artifactPromises } = options;
+  const { streamId, res, agentId, conversationId, userId } = options;
   const effectiveAgentId = agentId || 'default';
   const sessionId = conversationId || undefined;
 
@@ -163,20 +163,6 @@ const createPITools = (options = {}) => {
       } catch (err) {
         logger.error('[PITools] Failed to emit attachment:', err.message);
       }
-    }
-  };
-
-  /**
-   * Emit an attachment live via SSE AND record it for persistence: pushing
-   * into the request's artifactPromises array makes BaseClient.sendMessage
-   * merge it into responseMessage.attachments before the message is saved,
-   * so file cards survive page refreshes instead of living only in the
-   * client-side Recoil map.
-   */
-  const emitAndRecordAttachment = async (attachment) => {
-    await emitAttachment(attachment);
-    if (artifactPromises && Array.isArray(artifactPromises)) {
-      artifactPromises.push(Promise.resolve({ conversationId, ...attachment }));
     }
   };
 
@@ -277,7 +263,7 @@ PI will handle the file operation automatically - it can create new documents, m
           : [];
 
       for (const file of savedFiles) {
-        await emitAndRecordAttachment({
+        await emitAttachment({
           messageId: streamId,
           file_id: file.file_id,
           filename: file.filename,
@@ -402,7 +388,7 @@ Rules:
         const savedSkillFiles = await downloadAndSavePIFiles(skillFiles, userId);
 
         for (const file of savedSkillFiles) {
-          await emitAndRecordAttachment({
+          await emitAttachment({
             messageId: streamId,
             file_id: file.file_id,
             filename: file.filename,
@@ -658,7 +644,6 @@ const loadTools = async ({
         agentId: agent?.id,
         conversationId: options.conversationId,
         userId: typeof user === 'string' ? user : (user?.id ?? options.req?.user?.id),
-        artifactPromises: options.req?._agentArtifactPromises,
       })
     : [];
   const piToolNames = new Set(piTools.map((t) => t.name));
