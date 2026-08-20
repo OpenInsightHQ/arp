@@ -12,6 +12,7 @@
  */
 const express = require('express');
 const { z } = require('zod');
+const { SystemRoles } = require('librechat-data-provider');
 const { logger } = require('@librechat/data-schemas');
 const { createRequireApiKeyAuth } = require('@librechat/api');
 const { getMessages, validateAgentApiKey, findUser } = require('~/models');
@@ -57,10 +58,10 @@ router.get('/:conversationId', async (req, res) => {
       });
     }
 
-    const messages = await getMessages(
-      { conversationId, user: req.user.id },
-      '-_id -__v -user -streamLog',
-    );
+    const filter =
+      req.user.role === SystemRoles.ADMIN ? { conversationId } : { conversationId, user: req.user.id };
+
+    const messages = await getMessages(filter, '-_id -__v -user -streamLog');
     return res.status(200).json(messages);
   } catch (error) {
     logger.error('[messagesV2] Error fetching messages by conversationId:', error);
