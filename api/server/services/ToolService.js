@@ -414,12 +414,8 @@ const nativeTools = new Set([
   Tools.execute_code,
   Tools.file_search,
   Tools.web_search,
-  'office_skills',
   'execute_skill',
 ]);
-
-/** PI tools that extend execute_code capability */
-const piTools = new Set(['office_skills']);
 
 /** Skill execution tool - mounted for any agent with non-empty skills when PI is configured */
 const skillTools = new Set(['execute_skill']);
@@ -503,9 +499,6 @@ async function loadToolDefinitionsWrapper({
       if (tool === Tools.web_search) {
         return checkCapability(AgentCapabilities.web_search);
       }
-      if (piTools.has(tool)) {
-        return agent.provider === 'pi' && isPIAvailable;
-      }
       if (skillTools.has(tool)) {
         return isPIAvailable;
       }
@@ -517,14 +510,6 @@ async function loadToolDefinitionsWrapper({
       }
       return true;
     }) || [];
-
-  if (isPIAvailable && agent.provider === 'pi') {
-    for (const piTool of piTools) {
-      if (!filteredTools.includes(piTool)) {
-        filteredTools.push(piTool);
-      }
-    }
-  }
 
   if (mountSkillTools) {
     for (const skillTool of skillTools) {
@@ -931,8 +916,6 @@ async function loadAgentTools({
       } else if (tool === Tools.web_search) {
         includesWebSearch = checkCapability(AgentCapabilities.web_search);
         return includesWebSearch;
-      } else if (piTools.has(tool)) {
-        return agent.provider === 'pi' && isPIAvailable;
       } else if (skillTools.has(tool)) {
         return isPIAvailable;
       } else if (galleryTools.has(tool)) {
@@ -942,14 +925,6 @@ async function loadAgentTools({
       }
       return true;
     }) || [];
-
-  if (isPIAvailable && agent.provider === 'pi') {
-    for (const piTool of piTools) {
-      if (!_agentTools.includes(piTool)) {
-        _agentTools.push(piTool);
-      }
-    }
-  }
 
   if (mountSkillTools) {
     for (const skillTool of skillTools) {

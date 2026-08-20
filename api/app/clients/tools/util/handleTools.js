@@ -46,7 +46,14 @@ const { getUserPluginAuthValue } = require('~/server/services/PluginService');
 const { createMCPTool, createMCPTools } = require('~/server/services/MCP');
 const { loadAuthValues } = require('~/server/services/Tools/credentials');
 const { getMCPServerTools } = require('~/server/services/Config');
-const { isPIConfigured, handlePIToolCall, downloadPIFile } = require('~/server/services/PIService');
+const {
+  isPIConfigured,
+  handlePIToolCall,
+  downloadPIFile,
+  buildPiFileLinks,
+  filterPiResultFiles,
+} = require('~/server/services/PIService');
+const { scheduleBackgroundSkillFileCollection } = require('~/server/services/BackgroundSkillFiles');
 const { DynamicStructuredTool } = require('@langchain/core/tools');
 const { z } = require('zod');
 const { getRoleByName } = require('~/models/Role');
@@ -118,7 +125,7 @@ const downloadAndSavePIFiles = async (generatedFiles, userId) => {
 
       fs.writeFileSync(uploadPath, buffer);
 
-      const fileRecord = await createFile({
+      await createFile({
         file_id: fileId,
         user: userId,
         filename: fileInfo.name,
@@ -156,9 +163,25 @@ const createPITools = (options = {}) => {
     return tools;
   }
 
-  const { streamId, res, agentId, conversationId, userId } = options;
+  const { streamId, res, req, agentId, conversationId, userId } = options;
   const effectiveAgentId = agentId || 'default';
   const sessionId = conversationId || undefined;
+
+  /**
+   * Stash the canonical pi file-links footer (same "📎 下载文件" markdown as
+   * the one-pi chat surface) on the request so the controller appends it to
+   * the final response message text before saving — file links must not
+   * depend on the LLM relaying them from the collapsed tool output.
+   */
+  const stagePiFileLinks = (files, text) => {
+    if (!req || !Array.isArray(files) || files.length === 0) {
+      return;
+    }
+    const links = buildPiFileLinks(filterPiResultFiles(files, text || null));
+    if (links) {
+      req._piFileLinksText = (req._piFileLinksText || '') + links;
+    }
+  };
 
   /**
    * Resolve the current message-tree leaf for pi-side persistence.
@@ -254,123 +277,6 @@ const createPITools = (options = {}) => {
     }
   };
 
-  const formatResult = (result, savedFiles) => {
-    if (!result.success) {
-      return `Error: ${result.error}`;
-    }
-
-    const data = result.data;
-    let output = data.message || '';
-
-    if (savedFiles && savedFiles.length > 0) {
-      output += '\n\n**Generated Files:**\n';
-      for (const file of savedFiles) {
-        output += `- **${file.filename}**`;
-        if (file.size) {
-          output += ` (${(file.size / 1024).toFixed(2)} KB)`;
-        }
-        if (file.filepath) {
-          output += `\n  Download: ${file.filepath}`;
-        }
-        output += '\n';
-      }
-    } else if (data.generatedFiles && data.generatedFiles.length > 0) {
-      output += '\n\n**Generated Files:**\n';
-      for (const file of data.generatedFiles) {
-        output += `- ${file.name}`;
-        if (file.size) {
-          output += ` (${(file.size / 1024).toFixed(2)} KB)`;
-        }
-        if (file.url) {
-          output += `\n  URL: ${file.url}`;
-        }
-        output += '\n';
-      }
-    }
-
-    return output;
-  };
-
-  const piGenerateDocumentTool = new DynamicStructuredTool({
-    name: 'office_skills',
-    description: `Create or modify office files(docx, xlsx, pptx, pdf).
-
-Use this tool for office files(docx, xlsx, pptx, pdf) operations - simply pass the user's original request directly:
-- Create new documents (docx, xlsx, pptx, pdf)
-- Modify existing documents
-- Add content to documents
-- Update specific sections, lines, or chapters
-- Delete content from documents
-- Generate SVG graphics
-
-DO NOT use this tool for generating HTML pages or reports. Use the :::artifact{}::: syntax to output HTML directly.
-
-DO NOT interpret or restructure the user's request. Pass the user's original message directly as the 'request' parameter.
-
-PI will handle the file operation automatically - it can create new documents, modify existing documents, or append to documents based on the user's request.`,
-    schema: z.object({
-      request: z
-        .string()
-        .describe(
-          'The user request - describe what document to create/modify (docx, xlsx, pptx, pdf). Pass it exactly as stated without modification.',
-        ),
-    }),
-    func: async (input) => {
-      const onChunk = streamId
-        ? async (content) => {
-            await emitStreamChunk(content);
-          }
-        : undefined;
-
-      const onThinking = streamId
-        ? async (thinkingData) => {
-            await emitThinking(thinkingData);
-          }
-        : undefined;
-
-      const onToolEvent = streamId
-        ? async (toolData) => {
-            await emitToolEvent(toolData);
-          }
-        : undefined;
-
-      const result = await handlePIToolCall(
-        {
-          name: 'office_skills',
-          arguments: {
-            request: input.request,
-          },
-          agentId: effectiveAgentId,
-          sessionId,
-        },
-        onChunk,
-        onThinking,
-        onToolEvent,
-        userId,
-      );
-
-      const savedFiles =
-        result.success && result.data?.generatedFiles?.length > 0
-          ? await downloadAndSavePIFiles(result.data.generatedFiles, userId)
-          : [];
-
-      for (const file of savedFiles) {
-        await emitAttachment({
-          messageId: streamId,
-          file_id: file.file_id,
-          filename: file.filename,
-          filepath: file.filepath,
-          type: file.type,
-          size: file.size,
-        });
-      }
-
-      return formatResult(result, savedFiles);
-    },
-  });
-
-  tools.push(piGenerateDocumentTool);
-
   const formatSkillResult = (result) => {
     if (!result.success) {
       return `Error: ${result.error}`;
@@ -416,7 +322,8 @@ Use this tool when the user's request matches one of the skills listed in the <a
 Rules:
 - skillName MUST be one of the names listed in <available_skills>.
 - Pass the user's request in 'input' exactly as stated, without interpretation or restructuring.
-- The skill runs asynchronously and returns its final output and any generated files.`,
+- The skill runs asynchronously and returns its final output and any generated files.
+- If the skill output asks for confirmation, options, or any user decision (e.g. ending with a question or a list of choices to confirm): you MUST relay the full options/choices in your visible reply and STOP to wait for the user's answer. NEVER answer, confirm, or choose on the user's behalf, and NEVER proceed to a follow-up skill call in the same turn. Only re-invoke the skill after the user has explicitly responded.`,
     schema: z.object({
       skillName: z
         .string()
@@ -463,11 +370,16 @@ Rules:
         userId,
       );
 
-      // Persist skill output files as real message attachments (same pipeline
-      // as office_skills): download from pi, save to uploads, emit attachment
-      // events. Files then render in the attachment area with working
-      // download links instead of living only in the collapsed tool output.
+      // Persist skill output files as real message attachments: download
+      // from pi, save to uploads, emit attachment events. Files then render
+      // in the attachment area with working download links instead of living
+      // only in the collapsed tool output.
       if (result.success && !result.background && result.data?.files?.length > 0) {
+        // Also stage the canonical pi download-links footer so the controller
+        // appends it to the final response text (same surface as one-pi chat) —
+        // links must not depend on the LLM relaying them.
+        stagePiFileLinks(result.data.files, result.data.output);
+
         const skillFiles = result.data.files
           .filter((f) => f.path || f.name)
           .map((f) => ({
@@ -488,27 +400,26 @@ Rules:
             size: file.size,
           });
         }
+      }
 
-        // Replace raw pi URLs with the persisted attachment paths in the
-        // tool result text so any links the model relays also work.
-        if (savedSkillFiles.length > 0) {
-          let filesSection = '\n\n**Generated Files (attached to the message):**\n';
-          for (const file of savedSkillFiles) {
-            filesSection += `- **${file.filename}**`;
-            if (file.size) {
-              filesSection += ` (${(file.size / 1024).toFixed(2)} KB)`;
-            }
-            filesSection += '\n';
-          }
-          result.data.files = savedSkillFiles.map((f) => ({
-            name: f.filename,
-            path: f.filepath,
-            url: f.filepath,
-            mimeType: f.type,
-            size: f.size,
-          }));
-          result.data.output = `${(result.data.output || '').trimEnd()}${filesSection}`;
-        }
+      // Deadline hit: pi keeps executing in the background. Watch the pi skill
+      // task (TaskQueue doc) and, when it finishes, collect the files
+      // generated during the run and append their canonical pi download links
+      // (collectPiGeneratedFiles + buildPiFileDownloadUrl, same markdown as
+      // the one-pi chat surface) to the saved response message text.
+      if (result.success && result.background) {
+        scheduleBackgroundSkillFileCollection({
+          agentId: effectiveAgentId,
+          sessionId,
+          userId,
+          skillName,
+          startedAt: result.data?.startedAt,
+          // resolveParentMessageId() reads job.metadata.responseMessageId, i.e.
+          // the in-flight response message the watcher should append links to
+          responseMessageId: await resolveParentMessageId(),
+        }).catch(() => {
+          /* watcher logs its own errors */
+        });
       }
 
       return formatSkillResult(result);
@@ -732,6 +643,7 @@ const loadTools = async ({
     ? createPITools({
         streamId: options.req?._resumableStreamId,
         res: options.res,
+        req: options.req,
         agentId: agent?.id,
         conversationId: options.conversationId,
         userId: typeof user === 'string' ? user : (user?.id ?? options.req?.user?.id),

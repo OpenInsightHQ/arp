@@ -295,77 +295,6 @@ const executeCodeStream = async (
   );
 };
 
-const generateDocument = async ({ request, sessionId, cwd, agentId }, userId) => {
-  if (!isPIConfigured()) {
-    return { success: false, error: 'PI not configured' };
-  }
-
-  const axios = createAxiosInstance();
-
-  const headers = {
-    'api-key': PI_API_KEY,
-    'Content-Type': 'application/json',
-  };
-  if (userId) {
-    headers['X-User-Id'] = userId;
-  }
-
-  try {
-    const response = await axios.post(
-      `${PI_HOST}/prompt`,
-      {
-        message: request,
-        agentId: agentId || 'default',
-        sessionId,
-        cwd,
-        stream: false,
-      },
-      {
-        headers,
-        timeout: 300000,
-      },
-    );
-
-    return {
-      success: true,
-      data: {
-        message: response.data.message || '',
-        sessionId: response.data.sessionId,
-        generatedFiles: response.data.generatedFiles || [],
-      },
-    };
-  } catch (error) {
-    const errorMessage = error.response?.data?.message || error.message;
-    logger.error(`[PIService] generateDocument failed: ${errorMessage}`);
-    return { success: false, error: errorMessage };
-  }
-};
-
-const generateDocumentStream = async (
-  { request, sessionId, cwd, agentId },
-  onChunk,
-  onThinking,
-  onToolEvent,
-  userId,
-) => {
-  if (!isPIConfigured()) {
-    return { success: false, error: 'PI not configured' };
-  }
-
-  return sendToPIStream(
-    {
-      message: request,
-      agentId: agentId || 'default',
-      sessionId,
-      cwd,
-    },
-    onChunk,
-    onThinking,
-    onToolEvent,
-    userId,
-  );
-};
-
 const uploadFile = async (
   { filePath, sessionId, agentId, path: uploadPath, originalFilename },
   userId,
@@ -652,6 +581,14 @@ const buildSkillMessage = (skillName, input) => {
 };
 
 /**
+ * Canonical pi file download link shared by every consumer
+ * (collectPiGeneratedFiles, one-pi buildFileLinks, execute_skill tool
+ * results, GallerySkillTaskRun.files) so all surfaces emit identical URLs.
+ */
+const buildPiFileDownloadUrl = (agentId, sessionId, path) =>
+  `/arp/api/pi/files/download?agentId=${encodeURIComponent(String(agentId))}&sessionId=${encodeURIComponent(String(sessionId))}&path=${encodeURIComponent(String(path))}`;
+
+/**
  * List files generated in a pi session (recursive, optionally filtered by
  * mtime) as structured records with download URLs.
  *
@@ -686,13 +623,16 @@ const collectPiGeneratedFiles = async (agentId, sessionId, userId, modifiedSince
     const data = await response.json();
     return (data.files || [])
       .filter((f) => !f.isDirectory)
-      .map((f) => ({
-        name: (f.path || f.name || '').split('/').pop(),
-        path: f.path || f.name,
-        url: `/arp/api/pi/files/download?agentId=${encodeURIComponent(String(agentId))}&sessionId=${encodeURIComponent(String(sessionId))}&path=${encodeURIComponent(f.path || f.name)}`,
-        mimeType: f.mimeType || null,
-        size: f.size || null,
-      }));
+      .map((f) => {
+        const filePath = f.path || f.name;
+        return {
+          name: (filePath || '').split('/').pop(),
+          path: filePath,
+          url: buildPiFileDownloadUrl(agentId, sessionId, filePath),
+          mimeType: f.mimeType || null,
+          size: f.size || null,
+        };
+      });
   } catch (error) {
     logger.warn('[PIService] collectPiGeneratedFiles failed:', { error: error.message });
     return [];
@@ -739,6 +679,20 @@ const filterPiResultFiles = (files, text = null) => {
   }
 
   return uniqueFiles.slice(0, MAX_PI_RESULT_FILES);
+};
+
+/**
+ * Build the canonical "📎 下载文件：[📄 name](url)" markdown footer from an
+ * already-collected pi file list (collectPiGeneratedFiles output). Shared by
+ * the one-pi chat buildFileLinks surface and BackgroundSkillFiles so both
+ * emit identical link markdown. Returns null when there is nothing to show.
+ */
+const buildPiFileLinks = (files) => {
+  if (!files || files.length === 0) {
+    return null;
+  }
+  const links = files.map((f) => `[📄 ${f.name}](${f.url})`);
+  return '\n\n---\n📎 下载文件：' + links.join('  ');
 };
 
 /**
@@ -813,12 +767,23 @@ const executeSkill = async (
 
     while (true) {
       const readPromise = reader.read();
-      const result = await (deadlineMs > 0
-        ? Promise.race([
-            readPromise,
-            new Promise((resolve) => setTimeout(() => resolve({ __timeout: true }), deadlineMs)),
-          ]).then((r) => r)
-        : readPromise);
+      let result;
+      if (deadlineMs > 0) {
+        // Idle timeout: the timer is per-read and cleared once the race
+        // settles, so continuous output keeps resetting it and losing timers
+        // don't pile up for the full deadlineMs window.
+        let timer;
+        const timeoutPromise = new Promise((resolve) => {
+          timer = setTimeout(() => resolve({ __timeout: true }), deadlineMs);
+        });
+        try {
+          result = await Promise.race([readPromise, timeoutPromise]);
+        } finally {
+          clearTimeout(timer);
+        }
+      } else {
+        result = await readPromise;
+      }
 
       if (result.__timeout) {
         timedOut = true;
@@ -900,6 +865,7 @@ const executeSkill = async (
           message,
           output,
           files: filesSoFar,
+          startedAt: startedAt.toISOString(),
           note:
             `Skill "${skillName}" is still running in the background (over ${Math.round(deadlineMs / 1000)}s). ` +
             'Its output and generated files will appear in the conversation and the task panel when it finishes. ' +
@@ -925,80 +891,8 @@ const executeSkill = async (
   }
 };
 
-const getToolDefinitions = () => {
-  return [
-    {
-      type: 'function',
-      function: {
-        name: 'read_memory_detail',
-        description:
-          '读取长期记忆的详细信息。当需要了解记忆摘要背后的完整上下文时，使用记忆ID调用此工具获取原始对话内容。',
-        parameters: {
-          type: 'object',
-          properties: {
-            memoryId: {
-              type: 'string',
-              description: '记忆ID，在注入的记忆格式中「记忆ID:」后面的值',
-            },
-          },
-          required: ['memoryId'],
-        },
-      },
-    },
-    {
-      name: 'office_skills',
-      description: `Create or modify files of any type.
-
-Use this tool for ANY file operations - simply pass the user's original request directly:
-- Create new files
-- Modify existing files
-- Add content to files
-- Update specific sections, lines, or chapters
-- Delete content from files
-- Generate artifacts, React/Vue components, HTML pages, SVG graphics, UI components
-
-DO NOT interpret or restructure the user's request. Pass the user's original message directly as the 'request' parameter.
-
-Supported file types: docx, xlsx, pptx, pdf, txt, md, json, yaml, js, ts, py, html, css, svg, and any other file type.`,
-      parameters: {
-        type: 'object',
-        properties: {
-          request: {
-            type: 'string',
-            description:
-              'The user request - can describe what file to create/modify, requirements for artifacts, components, UI, etc. Pass it exactly as stated without modification.',
-          },
-        },
-        required: ['request'],
-      },
-    },
-    {
-      type: 'function',
-      function: {
-        name: 'execute_skill',
-        description:
-          'Execute a registered skill by name. Only use skills listed in the <available_skills> section. Pass the user request in the input parameter exactly as stated.',
-        parameters: {
-          type: 'object',
-          properties: {
-            skillName: {
-              type: 'string',
-              description: 'The skill name exactly as listed in <available_skills>.',
-            },
-            input: {
-              type: 'string',
-              description: "The user's request related to this skill, passed as stated.",
-            },
-          },
-          required: ['skillName', 'input'],
-        },
-      },
-    },
-  ];
-};
-
 const handlePIToolCall = async (
-  { name, arguments: args, sessionId, cwd, agentId, parentMessageId, agentSystemPrompt },
+  { name, arguments: args, sessionId, agentId, parentMessageId, agentSystemPrompt },
   onChunk,
   onThinking,
   onToolEvent,
@@ -1040,34 +934,7 @@ const handlePIToolCall = async (
     );
   }
 
-  if (name !== 'office_skills') {
-    return { success: false, error: `Unknown PI tool: ${name}` };
-  }
-
-  if (onChunk) {
-    return generateDocumentStream(
-      {
-        request: args.request || args.requirements,
-        sessionId,
-        cwd,
-        agentId: finalAgentId,
-      },
-      onChunk,
-      onThinking,
-      onToolEvent,
-      userId,
-    );
-  }
-
-  return generateDocument(
-    {
-      request: args.request || args.requirements,
-      sessionId,
-      cwd,
-      agentId: finalAgentId,
-    },
-    userId,
-  );
+  return { success: false, error: `Unknown PI tool: ${name}` };
 };
 
 module.exports = {
@@ -1077,16 +944,15 @@ module.exports = {
   executeCode,
   executeCodeStream,
   executeSkill,
-  generateDocument,
-  generateDocumentStream,
   uploadFile,
   getPIFiles,
   downloadPIFile,
   deletePIFile,
   isArtifactRequest,
-  getToolDefinitions,
   handlePIToolCall,
   collectPiGeneratedFiles,
+  buildPiFileDownloadUrl,
+  buildPiFileLinks,
   filterPiResultFiles,
   MAX_PI_RESULT_FILES,
   PI_HOST,
