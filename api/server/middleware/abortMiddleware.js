@@ -12,7 +12,7 @@ const { spendTokens, spendStructuredTokens } = require('~/models/spendTokens');
 const { truncateText, smartTruncateText } = require('~/app/clients/prompts');
 const clearPendingReq = require('~/cache/clearPendingReq');
 const { sendError } = require('~/server/middleware/error');
-const { saveMessage, getConvo } = require('~/models');
+const { saveMessage, getConvo, getMessages } = require('~/models');
 const { abortRun } = require('./abortRun');
 
 /**
@@ -125,8 +125,46 @@ async function abortMessage(req, res) {
   const completionTokens = await countTokens(text);
   const promptTokens = jobData?.promptTokens ?? 0;
 
+  /**
+   * Resolve the response document id.
+   *
+   * jobData.responseMessageId is set asynchronously (updateMetadata from
+   * onStart) and can be missing when the user aborts very early. Saving with
+   * a fresh id then creates a SECOND assistant child under the user message
+   * and forks the message tree. Reuse, in order of preference:
+   * 1. jobData.responseMessageId (the run's own response id)
+   * 2. an existing assistant response document for this turn (e.g. already
+   *    persisted by the pi backend when the abort signal reached it first)
+   * 3. the deterministic prelim id `<userMessageId>_` (same id pi uses via
+   *    the forwarded responseMessageId header, and the same fallback
+   *    GenerationJobManager.abortJob uses for its final event)
+   */
+  let responseMessageId = jobData?.responseMessageId;
+  if (!responseMessageId && jobData?.userMessage?.messageId) {
+    const userMessageId = jobData.userMessage.messageId;
+    responseMessageId = `${userMessageId}_`;
+    if (jobData?.conversationId) {
+      try {
+        const existing = await getMessages(
+          {
+            conversationId: jobData.conversationId,
+            user: userId,
+            isCreatedByUser: false,
+            parentMessageId: userMessageId,
+          },
+          'messageId',
+        );
+        if (existing.length > 0) {
+          responseMessageId = existing[existing.length - 1].messageId;
+        }
+      } catch (err) {
+        logger.warn('[abortMessage] Failed to look up existing response message:', err);
+      }
+    }
+  }
+
   const responseMessage = {
-    messageId: jobData?.responseMessageId,
+    messageId: responseMessageId,
     parentMessageId: jobData?.userMessage?.messageId,
     conversationId: jobData?.conversationId,
     content,
