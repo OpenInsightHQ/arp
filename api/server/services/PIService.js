@@ -1,7 +1,6 @@
 const { logger } = require('@librechat/data-schemas');
 const { createAxiosInstance, getPiSystemPrompt } = require('@librechat/api');
 const { PermissionBits, ResourceType } = require('librechat-data-provider');
-const mongoose = require('mongoose');
 const { MongoClient } = require('mongodb');
 
 const PI_API_KEY = process.env.PI_API_KEY;
@@ -520,59 +519,6 @@ const isArtifactRequest = (text, files) => {
   return false;
 };
 
-const readMemoryDetail = async ({ memoryId, userId }) => {
-  try {
-    const client = await getMongoClient();
-    const db = client.db();
-
-    // Query memory entry by _id and userId
-    const memoryEntry = await db.collection('memoryentries').findOne({
-      _id: new mongoose.Types.ObjectId(memoryId),
-      userId: new mongoose.Types.ObjectId(userId),
-    });
-
-    if (!memoryEntry) {
-      return { success: false, error: 'Memory entry not found' };
-    }
-
-    const result = {
-      success: true,
-      data: {
-        key: memoryEntry.key,
-        value: memoryEntry.value,
-        type: memoryEntry.type,
-        updated_at: memoryEntry.updated_at,
-      },
-    };
-
-    // If source.messageIds exists, fetch the original messages
-    if (
-      memoryEntry.source &&
-      memoryEntry.source.messageIds &&
-      memoryEntry.source.messageIds.length > 0
-    ) {
-      const messageIds = memoryEntry.source.messageIds;
-      const messages = await db
-        .collection('messages')
-        .find({ messageId: { $in: messageIds } })
-        .sort({ createdAt: 1 })
-        .toArray();
-
-      result.data.messages = messages.map((msg) => ({
-        messageId: msg.messageId,
-        sender: msg.sender,
-        text: msg.text,
-        createdAt: msg.createdAt,
-      }));
-    }
-
-    return result;
-  } catch (error) {
-    logger.error(`[PIService] readMemoryDetail failed: ${error.message}`);
-    return { success: false, error: error.message };
-  }
-};
-
 const buildSkillMessage = (skillName, input) => {
   const trimmedInput = typeof input === 'string' ? input.trim() : '';
   if (!trimmedInput) {
@@ -950,20 +896,6 @@ const handlePIToolCall = async (
   userId,
 ) => {
   const finalAgentId = agentId || 'default';
-
-  // Handle read_memory_detail tool
-  if (name === 'read_memory_detail') {
-    if (!userId) {
-      return { success: false, error: 'User ID is required to read memory detail' };
-    }
-    if (!args.memoryId) {
-      return { success: false, error: 'memoryId is required' };
-    }
-    return readMemoryDetail({
-      memoryId: args.memoryId,
-      userId,
-    });
-  }
 
   if (name === 'execute_skill') {
     if (!args.skillName) {

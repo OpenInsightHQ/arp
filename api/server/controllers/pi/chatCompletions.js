@@ -1,14 +1,10 @@
-const mongoose = require('mongoose');
-const { encodeEphemeralAgentId, PermissionTypes, Permissions } = require('librechat-data-provider');
-const { getCustomEndpointConfig, getPiSystemPrompt, checkAccess, getLangFromReq } = require('@librechat/api');
+const { encodeEphemeralAgentId } = require('librechat-data-provider');
+const { getCustomEndpointConfig, getPiSystemPrompt, getLangFromReq } = require('@librechat/api');
 const { getAppConfig } = require('~/server/services/Config');
-const { MemoryEntry } = require('~/db/models');
 const { GalleryArtifact } = require('~/models/GalleryArtifact');
-const { getRoleByName } = require('~/models/Role');
 const { GallerySqlQuery } = require('~/models/GallerySqlQuery');
 const { GalleryVersion } = require('~/models/GalleryVersion');
-const { getMessages, findUser } = require('~/models');
-const { logger } = require('@librechat/data-schemas');
+const { getMessages } = require('~/models');
 const { safeHttpStatus, sanitizeForLog } = require('~/server/utils/sanitize');
 const {
   buildSolidificationArtifactQuery,
@@ -45,60 +41,6 @@ async function buildFileLinks(text, agentId, sessionId, userId, startTime) {
 
   const tail = truncated ? `  ...(+more)` : '';
   return links + tail;
-}
-
-function formatMemories(memories) {
-  if (!memories || memories.length === 0) {
-    return '';
-  }
-
-  const groups = {
-    constraint: [],
-    profile: [],
-    preference: [],
-    knowledge: [],
-  };
-
-  for (const mem of memories) {
-    const type = mem.type || 'knowledge';
-    if (groups[type]) {
-      groups[type].push(mem);
-    } else {
-      groups.knowledge.push(mem);
-    }
-  }
-
-  const typeLabels = {
-    constraint: '【强约束 | constraint】',
-    profile: '【身份信息 | profile】',
-    preference: '【偏好 | preference】',
-    knowledge: '【知识 | knowledge】',
-  };
-
-  const typeOrder = ['constraint', 'profile', 'preference', 'knowledge'];
-  const parts = ['[用户长期记忆]', '以下是关于用户的长期记忆摘要，每条记忆可能指向更详细的原始对话（需要时可追问）：'];
-
-  for (const type of typeOrder) {
-    const items = groups[type];
-    parts.push('');
-    parts.push(typeLabels[type]);
-
-    if (items.length === 0) {
-      parts.push('（暂无）');
-    } else {
-      for (const item of items) {
-        const key = item.key || item.memoryKey || 'unknown';
-        const value = item.value || '';
-        parts.push(`• ${key}: ${value}`);
-
-        if (item._id) {
-          parts.push(`  记忆ID: ${item._id.toString()}`);
-        }
-      }
-    }
-  }
-
-  return parts.join('\n');
 }
 
 function extractSqlFromToolCalls(messages) {
@@ -351,68 +293,6 @@ function extractLastUserMessage(messages) {
   }
 
   return userMessage;
-}
-
-async function loadMemoryText(userId, req) {
-  if (!userId || userId === 'system') {
-    return '';
-  }
-
-  try {
-    let userForAccess = req.user;
-    if (!userForAccess && userId) {
-      const foundUser = await findUser({ _id: userId });
-      if (foundUser) {
-        userForAccess = foundUser;
-        req.user = foundUser;
-      }
-    }
-
-    const hasMemoryAccess = await checkAccess({
-      req,
-      user: userForAccess,
-      permissionType: PermissionTypes.MEMORIES,
-      permissions: [Permissions.USE, Permissions.READ],
-      getRoleByName,
-    });
-
-    if (!hasMemoryAccess) {
-      logger.debug(
-        `[PI Chat] User ${userId} does not have USE/READ permission for memories, skipping injection`,
-      );
-      return '';
-    }
-
-    if (req.user?.personalization?.memories === false) {
-      logger.debug(
-        `[PI Chat] User ${userId} has opted out of memories, skipping injection`,
-      );
-      return '';
-    }
-
-    const userIdObj = new mongoose.Types.ObjectId(userId);
-    const memories = await MemoryEntry.find({ userId: userIdObj }).lean();
-
-    if (!memories || memories.length === 0) {
-      console.log('[PI Chat] No memories found for user:', sanitizeForLog(userId));
-      return '';
-    }
-
-    return formatMemories(memories);
-  } catch (memoryError) {
-    console.error('[PI Chat] Memory query failed:', memoryError.message);
-    logger.error('[PI Chat] Memory query error:', memoryError);
-    return '';
-  }
-}
-
-async function buildSystemPromptWithMemory({ userId, req, lang }) {
-  const basePrompt = await getPiSystemPrompt(lang, userId, req.user?.role);
-  const memoryText = await loadMemoryText(userId, req);
-  if (!memoryText) {
-    return basePrompt;
-  }
-  return (basePrompt ? basePrompt + '\n\n' : '') + memoryText;
 }
 
 function writeSseChunk(res, payload) {
@@ -778,7 +658,8 @@ async function streamFromPI({ res, chatId, created, finalUserMessage, agentId, s
  * OpenAI-compatible PI chat completions handler.
  *
  * Translation layer between OpenAI-shaped requests and the PI backend
- * (memory injection, conversation history, artifact solidification).
+ * (conversation history, artifact solidification). The user's long-term
+ * memory and <available_prompts> sections are appended by pi itself.
  *
  * Reused by:
  *   - POST /api/pi/chat/completions (routes/pi.js)
@@ -823,7 +704,7 @@ const piChatCompletionsController = async (req, res) => {
   }
 
   const lang = getLangFromReq(req);
-  const systemPrompt = await buildSystemPromptWithMemory({ userId, req, lang });
+  const systemPrompt = await getPiSystemPrompt(lang);
 
   const streamStartTime = Date.now();
 
@@ -863,7 +744,6 @@ const piChatCompletionsController = async (req, res) => {
 
 module.exports = {
   piChatCompletionsController,
-  buildSystemPromptWithMemory,
   PI_HOST,
   PI_API_KEY,
 };

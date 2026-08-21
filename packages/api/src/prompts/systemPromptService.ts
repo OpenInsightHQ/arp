@@ -1,13 +1,9 @@
-import type { Types } from 'mongoose';
-import { replaceSpecialVars, PermissionBits, ResourceType } from 'librechat-data-provider';
+import { replaceSpecialVars } from 'librechat-data-provider';
 import type { ISystemPrompt } from '@librechat/data-schemas';
-import { AccessControlService } from '~/acl/accessControlService';
 import { getLangText } from '~/utils';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let SystemPromptModel: any = null;
-let mongooseInstance: typeof import('mongoose') | null = null;
-let aclService: AccessControlService | null = null;
 
 function getModel() {
   if (!SystemPromptModel) {
@@ -18,18 +14,10 @@ function getModel() {
   return SystemPromptModel;
 }
 
-function getAclService(): AccessControlService | null {
-  if (!aclService && mongooseInstance) {
-    aclService = new AccessControlService(mongooseInstance);
-  }
-  return aclService;
-}
-
 export function initializeSystemPromptService(mongoose: typeof import('mongoose')) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-require-imports
   const { createSystemPromptModel } = require('@librechat/data-schemas') as any;
   SystemPromptModel = createSystemPromptModel(mongoose);
-  mongooseInstance = mongoose;
 }
 
 export async function getSystemPrompt(key: string): Promise<string | null> {
@@ -86,76 +74,20 @@ export async function buildAvailablePromptsPrompt(
 }
 
 /**
- * Returns system prompts within the user's permission scope
- * (resourceType `systemPrompt`, VIEW bit). Without a userId, only publicly
- * granted prompts are returned.
+ * Returns the `pi.system` prompt with `{{lang}}` resolved.
+ *
+ * The `<available_prompts>` section and the user's long-term memory block
+ * are appended by pi itself (read from MongoDB with ACL/permission checks) —
+ * they were migrated out of this service.
  */
-async function getAccessibleSystemPrompts(
-  userId?: string,
-  role?: string,
-): Promise<ISystemPrompt[]> {
-  const acl = getAclService();
-  if (!acl) {
-    return [];
-  }
-
-  let resourceIds: Types.ObjectId[];
-  if (userId) {
-    resourceIds = await acl.findAccessibleResources({
-      userId,
-      role,
-      resourceType: ResourceType.SYSTEM_PROMPT,
-      requiredPermissions: PermissionBits.VIEW,
-    });
-  } else {
-    resourceIds = await acl.findPubliclyAccessibleResources({
-      resourceType: ResourceType.SYSTEM_PROMPT,
-      requiredPermissions: PermissionBits.VIEW,
-    });
-  }
-
-  if (resourceIds.length === 0) {
-    return [];
-  }
-
-  const Model = getModel();
-  return Model.find({
-    _id: { $in: resourceIds },
-    piPrompt: true,
-    piSavePath: { $ne: '', $exists: true },
-  })
-    .sort({ key: 1 })
-    .lean();
-}
-
-/**
- * Returns the `pi.system` prompt with an `<available_prompts>` section listing
- * the system prompts the given user has permission to view
- * (resourceType `systemPrompt`).
- */
-export async function getPiSystemPrompt(
-  lang?: string,
-  userId?: string,
-  role?: string,
-): Promise<string | null> {
+export async function getPiSystemPrompt(lang?: string): Promise<string | null> {
   const basePrompt = await getSystemPrompt('pi.system');
   if (!basePrompt) {
     return null;
   }
 
   const langText = getLangText(lang);
-  const resolvedBasePrompt = /{{lang}}/i.test(basePrompt)
-    ? basePrompt.replace(/{{lang}}/gi, langText)
-    : basePrompt;
-
-  const accessiblePrompts = await getAccessibleSystemPrompts(userId, role);
-  if (accessiblePrompts.length === 0) {
-    return resolvedBasePrompt;
-  }
-
-  const promptEntries = accessiblePrompts.map(formatAvailablePromptEntry).join('\n');
-
-  return `${resolvedBasePrompt}\n\n<available_prompts>\n${promptEntries}\n</available_prompts>`;
+  return /{{lang}}/i.test(basePrompt) ? basePrompt.replace(/{{lang}}/gi, langText) : basePrompt;
 }
 
 export async function getSystemPromptDoc(key: string): Promise<ISystemPrompt | null> {

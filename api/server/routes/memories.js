@@ -1,5 +1,4 @@
 const express = require('express');
-const mongoose = require('mongoose');
 const { Tokenizer, generateCheckAccess } = require('@librechat/api');
 const { PermissionTypes, Permissions } = require('librechat-data-provider');
 const {
@@ -8,7 +7,6 @@ const {
   createMemory,
   deleteMemory,
   setMemory,
-  getMessages,
 } = require('~/models');
 const { requireJwtAuth, configMiddleware } = require('~/server/middleware');
 const { getRoleByName } = require('~/models/Role');
@@ -50,130 +48,6 @@ const checkMemoryOptOut = generateCheckAccess({
   permissionType: PermissionTypes.MEMORIES,
   permissions: [Permissions.USE, Permissions.OPT_OUT],
   getRoleByName,
-});
-
-/**
- * API Key authentication middleware for /:id/details route
- * Checks for X-API-Key header and sets req.user if valid
- */
-const apiKeyAuthMiddleware = (req, res, next) => {
-  const apiKey = req.headers['x-api-key'];
-  const validApiKey = 'lc-memory-detail-2026';
-  
-  if (apiKey && apiKey === validApiKey) {
-    // API Key authentication successful - proceed without userId requirement
-    return next();
-  }
-  
-  // No valid API Key, let requireJwtAuth handle it
-  next();
-};
-
-
-
-/**
- * GET /memories/:id/details
- * Returns the memory details along with the original messages that created it.
- * Only requires memory _id via query param - no userId check needed since ObjectId is secure.
- */
-router.get('/details', apiKeyAuthMiddleware, async (req, res) => {
-  const id = req.query.id;
-
-  try {
-    const MemoryEntry = mongoose.models.MemoryEntry;
-
-    // Validate and convert id to ObjectId
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ error: 'Invalid memory ID format.' });
-    }
-
-    // Only query by _id - no userId check needed
-    const memory = await MemoryEntry.findOne({ _id: new mongoose.Types.ObjectId(id) }).lean();
-
-    if (!memory) {
-      return res.status(404).json({ error: 'Memory not found.' });
-    }
-
-    // Extract message IDs from source
-    let messages = [];
-    if (memory.source?.messageIds && memory.source.messageIds.length > 0) {
-      const messageDocs = await getMessages({ messageId: { $in: memory.source.messageIds } });
-
-      messages = messageDocs.map((msg) => ({
-        messageId: msg.messageId,
-        role: msg.isCreatedByUser ? 'user' : 'assistant',
-        text: msg.text || msg.content?.find((c) => c.type === 'text')?.text || '',
-      }));
-    }
-
-    // Format the response
-    res.json({
-      memory: {
-        id: memory._id.toString(),
-        key: memory.key,
-        value: memory.value,
-        type: memory.type || 'knowledge',
-        weight: memory.weight || { importance: 0.5 },
-        source: memory.source || {},
-        created_at: memory.created_at?.toISOString() || memory.updated_at?.toISOString(),
-        updated_at: memory.updated_at?.toISOString(),
-      },
-      messages,
-    });
-  } catch (error) {
-    console.error('Error fetching memory details:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-/**
- * GET /memories/conversation-by-memory
- * Returns the full conversation chat history linked to a memory.
- * Uses memory's source.conversationId to fetch all messages in that conversation.
- *
- * Query params:
- *   - memoryId: the memory _id (required)
- */
-router.get('/conversation-by-memory', apiKeyAuthMiddleware, async (req, res) => {
-  // Accept both 'memoryId' and 'id' as parameter name
-  const memoryId = req.query.memoryId || req.query.id;
-
-  try {
-    const MemoryEntry = mongoose.models.MemoryEntry;
-
-    if (!memoryId || !mongoose.Types.ObjectId.isValid(memoryId)) {
-      return res.status(400).json({ error: 'Invalid memory ID format.' });
-    }
-
-    const memory = await MemoryEntry.findOne({ _id: new mongoose.Types.ObjectId(memoryId) }).lean();
-    if (!memory) {
-      return res.status(404).json({ error: 'Memory not found.' });
-    }
-
-    const conversationId = memory.source?.conversationId;
-    if (!conversationId) {
-      return res.status(404).json({ error: 'No conversationId found in memory source.' });
-    }
-
-    const messages = await getMessages({ conversationId });
-
-    const formatted = messages.map((msg) => ({
-      messageId: msg.messageId,
-      role: msg.isCreatedByUser ? 'user' : 'assistant',
-      text: msg.text || msg.content?.find((c) => c.type === 'text')?.text || '',
-      createdAt: msg.createdAt,
-    }));
-
-    res.json({
-      conversationId,
-      memoryId: memory._id.toString(),
-      messageCount: formatted.length,
-      messages: formatted,
-    });
-  } catch (error) {
-    console.error('Error fetching conversation by memory:', error);
-    res.status(500).json({ error: error.message });
-  }
 });
 
 /**

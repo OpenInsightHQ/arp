@@ -2,8 +2,8 @@ const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const { requireJwtAuth } = require('../middleware/');
-const { piChatCompletionsController, buildSystemPromptWithMemory, PI_HOST, PI_API_KEY } = require('~/server/controllers/pi/chatCompletions');
-const { getLangFromReq } = require('@librechat/api');
+const { piChatCompletionsController, PI_HOST, PI_API_KEY } = require('~/server/controllers/pi/chatCompletions');
+const { getLangFromReq, getPiSystemPrompt } = require('@librechat/api');
 const { safeHttpStatus, sanitizeForLog } = require('~/server/utils/sanitize');
 
 const PI_UPLOAD_LIMIT_MB = parseInt(process.env.PI_UPLOAD_LIMIT_MB || '1024', 10);
@@ -234,7 +234,7 @@ router.post('/prompt', requireJwtAuth, async (req, res) => {
         'api-key': PI_API_KEY,
         'X-User-Id': req.user.id,
       },
-      body: JSON.stringify({ message, agentId, sessionId, cwd, stream, systemPrompt: await buildSystemPromptWithMemory({ userId: req.user.id, req, lang: getLangFromReq(req) }) }),
+      body: JSON.stringify({ message, agentId, sessionId, cwd, stream, systemPrompt: await getPiSystemPrompt(getLangFromReq(req)) }),
     });
 
     if (!response.ok) {
