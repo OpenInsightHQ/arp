@@ -90,6 +90,7 @@ export interface InitializeAgentParams {
     tool_options: AgentToolOptions | undefined;
     tool_resources: AgentToolResources | undefined;
     skills: AgentSkill[] | undefined;
+    knowledgePromptKeys: string[] | undefined;
   }) => Promise<{
     /** Full tool instances (only present when definitionsOnly=false) */
     tools?: GenericTool[];
@@ -303,6 +304,7 @@ export async function initializeAgent(
     tool_options: agent.tool_options,
     tool_resources,
     skills: agent.skills ?? undefined,
+    knowledgePromptKeys: agent.knowledgePromptKeys ?? undefined,
   })) ?? {
     tools: [],
     toolContextMap: {},

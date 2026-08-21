@@ -96,8 +96,17 @@ function createToolLoader(signal, definitionsOnly = true) {
     tool_options,
     tool_resources,
     skills,
+    knowledgePromptKeys,
   }) {
-    const agent = { id: agentId, tools, provider, model, tool_options, skills };
+    const agent = {
+      id: agentId,
+      tools,
+      provider,
+      model,
+      tool_options,
+      skills,
+      knowledgePromptKeys,
+    };
     try {
       return await loadAgentTools({
         req,
