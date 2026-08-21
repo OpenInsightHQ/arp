@@ -18,6 +18,15 @@ const agentSchema = new Schema<IAgent>(
     instructions: {
       type: String,
     },
+    /** Key into the systemprompts collection; used as instructions when `instructions` is empty */
+    mainPromptKey: {
+      type: String,
+    },
+    /** systemprompts keys exposed to the agent via <available_prompts> / read_prompt */
+    knowledgePromptKeys: {
+      type: [String],
+      default: undefined,
+    },
     avatar: {
       type: Schema.Types.Mixed,
       default: undefined,

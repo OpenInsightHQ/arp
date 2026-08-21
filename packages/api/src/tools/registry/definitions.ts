@@ -56,6 +56,18 @@ export const piExecuteSkillSchema: ExtendedJsonSchema = {
   required: ['skillName', 'input'],
 };
 
+export const piReadPromptSchema: ExtendedJsonSchema = {
+  type: 'object',
+  properties: {
+    key: {
+      type: 'string',
+      description:
+        'The prompt key exactly as listed in <available_prompts> of the system prompt. Do not invent keys.',
+    },
+  },
+  required: ['key'],
+};
+
 /** Google Search tool JSON schema */
 export const googleSearchSchema: ExtendedJsonSchema = {
   type: 'object',
@@ -654,6 +666,19 @@ Rules:
 - The skill runs asynchronously and returns its final output and any generated files.
 - If the skill output asks for confirmation, options, or any user decision (e.g. ending with a question or a list of choices to confirm): you MUST relay the full options/choices in your visible reply and STOP to wait for the user's answer. NEVER answer, confirm, or choose on the user's behalf, and NEVER proceed to a follow-up skill call in the same turn. Only re-invoke the skill after the user has explicitly responded.`,
     schema: piExecuteSkillSchema,
+    toolType: 'builtin',
+    responseFormat: 'content',
+  },
+  read_prompt: {
+    name: 'read_prompt',
+    description: `Read a system prompt's full content by its key.
+
+Use this tool when you need the detailed content of one of the prompts listed in the <available_prompts> section of the system prompt.
+
+Rules:
+- key MUST be one of the <name> values listed in <available_prompts>. Do not invent keys.
+- Returns the prompt content; use it to fulfill the user's request.`,
+    schema: piReadPromptSchema,
     toolType: 'builtin',
     responseFormat: 'content',
   },

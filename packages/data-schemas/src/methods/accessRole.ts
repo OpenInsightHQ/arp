@@ -209,6 +209,13 @@ export function createAccessRoleMethods(mongoose: typeof import('mongoose')) {
         resourceType: ResourceType.GALLERY_ARTIFACT,
         permBits: RoleBits.OWNER,
       },
+      {
+        accessRoleId: AccessRoleIds.SYSTEM_PROMPT_VIEWER,
+        name: 'System Prompt Viewer',
+        description: 'Can use/view a system prompt',
+        resourceType: ResourceType.SYSTEM_PROMPT,
+        permBits: RoleBits.VIEWER,
+      },
     ];
 
     const result: Record<string, IAccessRole> = {};

@@ -11,6 +11,10 @@ export interface IAgent extends Omit<Document, 'model'> {
   name?: string;
   description?: string;
   instructions?: string;
+  /** Key into the systemprompts collection; used as instructions when `instructions` is empty */
+  mainPromptKey?: string;
+  /** systemprompts keys exposed to the agent via <available_prompts> / read_prompt */
+  knowledgePromptKeys?: string[];
   avatar?: {
     filepath: string;
     source: string;

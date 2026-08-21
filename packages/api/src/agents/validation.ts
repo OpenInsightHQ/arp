@@ -65,6 +65,8 @@ export const agentBaseSchema = z.object({
   name: z.string().nullable().optional(),
   description: z.string().nullable().optional(),
   instructions: z.string().nullable().optional(),
+  mainPromptKey: z.string().nullable().optional(),
+  knowledgePromptKeys: z.array(z.string()).optional(),
   avatar: agentAvatarSchema.nullable().optional(),
   model_parameters: z.record(z.unknown()).optional(),
   tools: z.array(z.string()).optional(),

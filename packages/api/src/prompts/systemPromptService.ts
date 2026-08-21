@@ -1,9 +1,13 @@
-import { replaceSpecialVars } from 'librechat-data-provider';
+import type { Types } from 'mongoose';
+import { replaceSpecialVars, PermissionBits, ResourceType } from 'librechat-data-provider';
 import type { ISystemPrompt } from '@librechat/data-schemas';
+import { AccessControlService } from '~/acl/accessControlService';
 import { getLangText } from '~/utils';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let SystemPromptModel: any = null;
+let mongooseInstance: typeof import('mongoose') | null = null;
+let aclService: AccessControlService | null = null;
 
 function getModel() {
   if (!SystemPromptModel) {
@@ -14,10 +18,18 @@ function getModel() {
   return SystemPromptModel;
 }
 
+function getAclService(): AccessControlService | null {
+  if (!aclService && mongooseInstance) {
+    aclService = new AccessControlService(mongooseInstance);
+  }
+  return aclService;
+}
+
 export function initializeSystemPromptService(mongoose: typeof import('mongoose')) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-require-imports
   const { createSystemPromptModel } = require('@librechat/data-schemas') as any;
   SystemPromptModel = createSystemPromptModel(mongoose);
+  mongooseInstance = mongoose;
 }
 
 export async function getSystemPrompt(key: string): Promise<string | null> {
@@ -39,7 +51,89 @@ export async function getSystemPromptOrSeed(key: string): Promise<string | null>
   return getSystemPrompt(key);
 }
 
-export async function getPiSystemPrompt(lang?: string): Promise<string | null> {
+function formatAvailablePromptEntry(prompt: Pick<ISystemPrompt, 'key' | 'description'>): string {
+  return `  <prompt>\n    <name>${prompt.key}</name>\n    <description>${prompt.description}</description>\n  </prompt>`;
+}
+
+/**
+ * Builds the `<available_prompts>` XML for explicit agent-configured keys
+ * (`knowledgePromptKeys`), listing each prompt's key and description so the
+ * LLM can fetch full content via the `read_prompt` tool.
+ */
+export async function buildAvailablePromptsPrompt(
+  keys: string[] | undefined,
+): Promise<string | null> {
+  if (!keys || keys.length === 0) {
+    return null;
+  }
+
+  const uniqueKeys = [...new Set(keys)];
+  const Model = getModel();
+  const docs: ISystemPrompt[] = await Model.find({ key: { $in: uniqueKeys } }).lean();
+  const docsByKey = new Map(docs.map((doc) => [doc.key, doc]));
+
+  const entries = uniqueKeys
+    .map((key) => docsByKey.get(key))
+    .filter((doc): doc is ISystemPrompt => doc != null)
+    .map(formatAvailablePromptEntry)
+    .join('\n');
+
+  if (!entries) {
+    return null;
+  }
+
+  return `<available_prompts>\n${entries}\n</available_prompts>`;
+}
+
+/**
+ * Returns system prompts within the user's permission scope
+ * (resourceType `systemPrompt`, VIEW bit). Without a userId, only publicly
+ * granted prompts are returned.
+ */
+async function getAccessibleSystemPrompts(
+  userId?: string,
+  role?: string,
+): Promise<ISystemPrompt[]> {
+  const acl = getAclService();
+  if (!acl) {
+    return [];
+  }
+
+  let resourceIds: Types.ObjectId[];
+  if (userId) {
+    resourceIds = await acl.findAccessibleResources({
+      userId,
+      role,
+      resourceType: ResourceType.SYSTEM_PROMPT,
+      requiredPermissions: PermissionBits.VIEW,
+    });
+  } else {
+    resourceIds = await acl.findPubliclyAccessibleResources({
+      resourceType: ResourceType.SYSTEM_PROMPT,
+      requiredPermissions: PermissionBits.VIEW,
+    });
+  }
+
+  if (resourceIds.length === 0) {
+    return [];
+  }
+
+  const Model = getModel();
+  return Model.find({ _id: { $in: resourceIds } })
+    .sort({ key: 1 })
+    .lean();
+}
+
+/**
+ * Returns the `pi.system` prompt with an `<available_prompts>` section listing
+ * the system prompts the given user has permission to view
+ * (resourceType `systemPrompt`).
+ */
+export async function getPiSystemPrompt(
+  lang?: string,
+  userId?: string,
+  role?: string,
+): Promise<string | null> {
   const basePrompt = await getSystemPrompt('pi.system');
   if (!basePrompt) {
     return null;
@@ -50,24 +144,12 @@ export async function getPiSystemPrompt(lang?: string): Promise<string | null> {
     ? basePrompt.replace(/{{lang}}/gi, langText)
     : basePrompt;
 
-  const Model = getModel();
-  const piPrompts: ISystemPrompt[] = await Model.find({
-    piPrompt: true,
-    piSavePath: { $ne: '', $exists: true },
-  })
-    .sort({ key: 1 })
-    .lean();
-
-  if (piPrompts.length === 0) {
+  const accessiblePrompts = await getAccessibleSystemPrompts(userId, role);
+  if (accessiblePrompts.length === 0) {
     return resolvedBasePrompt;
   }
 
-  const promptEntries = piPrompts
-    .map(
-      (p) =>
-        `  <prompt>\n    <name>${p.key}</name>\n    <description>${p.description}</description>\n    <location>${p.piSavePath}</location>\n  </prompt>`,
-    )
-    .join('\n');
+  const promptEntries = accessiblePrompts.map(formatAvailablePromptEntry).join('\n');
 
   return `${resolvedBasePrompt}\n\n<available_prompts>\n${promptEntries}\n</available_prompts>`;
 }

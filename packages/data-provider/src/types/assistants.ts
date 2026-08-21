@@ -257,6 +257,10 @@ export type Agent = {
   created_at: number;
   avatar: AgentAvatar | null;
   instructions?: string | null;
+  /** Key into the systemprompts collection; used as instructions when `instructions` is empty */
+  mainPromptKey?: string | null;
+  /** systemprompts keys exposed to the agent via <available_prompts> / read_prompt */
+  knowledgePromptKeys?: string[];
   additional_instructions?: string | null;
   tools?: string[];
   projectIds?: string[];
@@ -300,6 +304,8 @@ export type AgentCreateParams = {
   provider: AgentProvider;
   model: string | null;
   model_parameters: AgentModelParameters;
+  mainPromptKey?: string | null;
+  knowledgePromptKeys?: string[];
 } & Pick<
   Agent,
   | 'agent_ids'
@@ -327,6 +333,8 @@ export type AgentUpdateParams = {
   projectIds?: string[];
   removeProjectIds?: string[];
   isCollaborative?: boolean;
+  mainPromptKey?: string | null;
+  knowledgePromptKeys?: string[];
 } & Pick<
   Agent,
   | 'agent_ids'

@@ -34,7 +34,7 @@ import {
 } from '~/utils';
 import { filterFilesByEndpointConfig } from '~/files';
 import { appendUniquePrompt, buildVisualizationPrompt, generateArtifactsPrompt } from '~/prompts';
-import { buildAvailableSkillsPrompt } from '~/prompts';
+import { buildAvailableSkillsPrompt, buildAvailablePromptsPrompt } from '~/prompts';
 import { getSystemPromptOrSeed } from '~/prompts';
 import { getProviderConfig } from '~/endpoints';
 import { primeResources } from './resources';
@@ -389,6 +389,14 @@ export async function initializeAgent(
     (agent.model_parameters as Record<string, unknown>).configuration = options.configOptions;
   }
 
+  // mainPromptKey is the fallback instructions source: `instructions` wins when non-empty
+  if ((!agent.instructions || agent.instructions === '') && agent.mainPromptKey) {
+    const mainPrompt = await getSystemPromptOrSeed(agent.mainPromptKey);
+    if (mainPrompt) {
+      agent.instructions = mainPrompt;
+    }
+  }
+
   if (agent.instructions && agent.instructions !== '') {
     agent.instructions = replaceSpecialVars({
       text: agent.instructions,
@@ -503,6 +511,14 @@ export async function initializeAgent(
     agent.additional_instructions = appendUniquePrompt(
       agent.additional_instructions,
       availableSkillsPrompt,
+    );
+  }
+
+  const availablePromptsPrompt = await buildAvailablePromptsPrompt(agent.knowledgePromptKeys);
+  if (availablePromptsPrompt) {
+    agent.additional_instructions = appendUniquePrompt(
+      agent.additional_instructions,
+      availablePromptsPrompt,
     );
   }
 

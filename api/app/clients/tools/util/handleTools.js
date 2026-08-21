@@ -426,7 +426,44 @@ Rules:
     },
   });
 
-  tools.push(piExecuteSkillTool);
+  const piReadPromptTool = new DynamicStructuredTool({
+    name: 'read_prompt',
+    description: `Read a system prompt's full content by its key.
+
+Use this tool when you need the detailed content of one of the prompts listed in the <available_prompts> section of the system prompt.
+
+Rules:
+- key MUST be one of the <name> values listed in <available_prompts>. Do not invent keys.
+- Returns the prompt content; use it to fulfill the user's request.`,
+    schema: z.object({
+      key: z
+        .string()
+        .describe(
+          'The prompt key exactly as listed in <available_prompts>. Do not invent keys.',
+        ),
+    }),
+    func: async ({ key }) => {
+      const result = await handlePIToolCall(
+        {
+          name: 'read_prompt',
+          arguments: { key },
+          agentId: effectiveAgentId,
+          sessionId,
+        },
+        undefined,
+        undefined,
+        undefined,
+        userId,
+      );
+
+      if (!result.success) {
+        return `Error: ${result.error}`;
+      }
+      return result.data?.content || '';
+    },
+  });
+
+  tools.push(piExecuteSkillTool, piReadPromptTool);
   return tools;
 };
 

@@ -48,6 +48,7 @@ export enum ResourceType {
   MCPSERVER = 'mcpServer',
   REMOTE_AGENT = 'remoteAgent',
   GALLERY_ARTIFACT = 'galleryArtifact',
+  SYSTEM_PROMPT = 'systemPrompt',
 }
 
 /**
@@ -83,6 +84,7 @@ export enum AccessRoleIds {
   GALLERY_ARTIFACT_VIEWER = 'galleryArtifact_viewer',
   GALLERY_ARTIFACT_EDITOR = 'galleryArtifact_editor',
   GALLERY_ARTIFACT_OWNER = 'galleryArtifact_owner',
+  SYSTEM_PROMPT_VIEWER = 'systemprompt_viewer',
 }
 
 // ===== ZOD SCHEMAS =====
@@ -322,6 +324,7 @@ export function accessRoleToPermBits(accessRoleId: string): number {
     case AccessRoleIds.MCPSERVER_VIEWER:
     case AccessRoleIds.REMOTE_AGENT_VIEWER:
     case AccessRoleIds.GALLERY_ARTIFACT_VIEWER:
+    case AccessRoleIds.SYSTEM_PROMPT_VIEWER:
       return PermissionBits.VIEW;
     case AccessRoleIds.AGENT_EDITOR:
     case AccessRoleIds.PROMPTGROUP_EDITOR:

@@ -1,5 +1,6 @@
 const { logger } = require('@librechat/data-schemas');
 const { createAxiosInstance, getPiSystemPrompt } = require('@librechat/api');
+const { PermissionBits, ResourceType } = require('librechat-data-provider');
 const mongoose = require('mongoose');
 const { MongoClient } = require('mongodb');
 
@@ -581,6 +582,56 @@ const buildSkillMessage = (skillName, input) => {
 };
 
 /**
+ * Read a system prompt's content by key for the read_prompt tool call.
+ * Access is granted when the user holds VIEW permission on the prompt
+ * (resourceType `systemPrompt`) or when the key is configured on the
+ * calling agent (mainPromptKey / knowledgePromptKeys — author-curated).
+ */
+const readPrompt = async ({ key, userId, agentId }) => {
+  try {
+    if (!key) {
+      return { success: false, error: 'key is required' };
+    }
+
+    const client = await getMongoClient();
+    const db = client.db();
+    const promptDoc = await db.collection('systemprompts').findOne({ key });
+    if (!promptDoc) {
+      return { success: false, error: `Prompt not found: ${key}` };
+    }
+
+    let allowed = false;
+    if (userId) {
+      // Lazy require to avoid load-order cycles with ~/models ↔ PermissionService
+      const { checkPermission } = require('./PermissionService');
+      allowed = await checkPermission({
+        userId,
+        resourceType: ResourceType.SYSTEM_PROMPT,
+        resourceId: promptDoc._id,
+        requiredPermission: PermissionBits.VIEW,
+      });
+    }
+
+    if (!allowed && agentId && agentId !== 'default') {
+      const agentDoc = await db
+        .collection('agents')
+        .findOne({ id: agentId }, { projection: { mainPromptKey: 1, knowledgePromptKeys: 1 } });
+      allowed =
+        agentDoc?.mainPromptKey === key || (agentDoc?.knowledgePromptKeys || []).includes(key);
+    }
+
+    if (!allowed) {
+      return { success: false, error: `No permission to read prompt: ${key}` };
+    }
+
+    return { success: true, data: { key, content: promptDoc.content } };
+  } catch (error) {
+    logger.error(`[PIService] readPrompt failed: ${error.message}`);
+    return { success: false, error: error.message };
+  }
+};
+
+/**
  * Canonical pi file download link shared by every consumer
  * (collectPiGeneratedFiles, one-pi buildFileLinks, execute_skill tool
  * results, GallerySkillTaskRun.files) so all surfaces emit identical URLs.
@@ -932,6 +983,17 @@ const handlePIToolCall = async (
       onToolEvent,
       userId,
     );
+  }
+
+  if (name === 'read_prompt') {
+    if (!args.key) {
+      return { success: false, error: 'key is required' };
+    }
+    return readPrompt({
+      key: args.key,
+      userId,
+      agentId: finalAgentId,
+    });
   }
 
   return { success: false, error: `Unknown PI tool: ${name}` };

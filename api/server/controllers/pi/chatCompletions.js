@@ -407,7 +407,7 @@ async function loadMemoryText(userId, req) {
 }
 
 async function buildSystemPromptWithMemory({ userId, req, lang }) {
-  const basePrompt = await getPiSystemPrompt(lang);
+  const basePrompt = await getPiSystemPrompt(lang, userId, req.user?.role);
   const memoryText = await loadMemoryText(userId, req);
   if (!memoryText) {
     return basePrompt;

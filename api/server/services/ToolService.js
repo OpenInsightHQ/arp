@@ -415,10 +415,14 @@ const nativeTools = new Set([
   Tools.file_search,
   Tools.web_search,
   'execute_skill',
+  'read_prompt',
 ]);
 
 /** Skill execution tool - mounted for any agent with non-empty skills when PI is configured */
 const skillTools = new Set(['execute_skill']);
+
+/** Prompt reading tool - mounted for any agent with knowledgePromptKeys when PI is configured */
+const promptTools = new Set(['read_prompt']);
 
 /** Gallery SQL tools - removed save_report_sql (publish API handles SQL extraction automatically) */
 const galleryTools = new Set([]);
@@ -459,15 +463,18 @@ async function loadToolDefinitionsWrapper({
 
   /** execute_skill is mounted on skill-bearing agents even when agent.tools is empty */
   const mountSkillTools = agent.skills?.length > 0 && isPIConfigured(req);
+  /** read_prompt is mounted on agents with knowledgePromptKeys even when agent.tools is empty */
+  const mountPromptTools = agent.knowledgePromptKeys?.length > 0 && isPIConfigured(req);
 
-  if ((!agent.tools || agent.tools.length === 0) && !mountSkillTools) {
+  if ((!agent.tools || agent.tools.length === 0) && !mountSkillTools && !mountPromptTools) {
     return { toolDefinitions: [] };
   }
 
   if (
     agent.tools?.length === 1 &&
     (agent.tools[0] === AgentCapabilities.context || agent.tools[0] === AgentCapabilities.ocr) &&
-    !mountSkillTools
+    !mountSkillTools &&
+    !mountPromptTools
   ) {
     return { toolDefinitions: [] };
   }
@@ -502,6 +509,9 @@ async function loadToolDefinitionsWrapper({
       if (skillTools.has(tool)) {
         return isPIAvailable;
       }
+      if (promptTools.has(tool)) {
+        return isPIAvailable;
+      }
       if (galleryTools.has(tool)) {
         return true; // Gallery tools are always available
       }
@@ -515,6 +525,14 @@ async function loadToolDefinitionsWrapper({
     for (const skillTool of skillTools) {
       if (!filteredTools.includes(skillTool)) {
         filteredTools.push(skillTool);
+      }
+    }
+  }
+
+  if (mountPromptTools) {
+    for (const promptTool of promptTools) {
+      if (!filteredTools.includes(promptTool)) {
+        filteredTools.push(promptTool);
       }
     }
   }
@@ -864,16 +882,19 @@ async function loadAgentTools({
 
   /** execute_skill is mounted on skill-bearing agents even when agent.tools is empty */
   const mountSkillTools = agent.skills?.length > 0 && isPIConfigured(req);
+  /** read_prompt is mounted on agents with knowledgePromptKeys even when agent.tools is empty */
+  const mountPromptTools = agent.knowledgePromptKeys?.length > 0 && isPIConfigured(req);
 
   if (!agent.tools || agent.tools.length === 0) {
-    if (!mountSkillTools) {
+    if (!mountSkillTools && !mountPromptTools) {
       return { toolDefinitions: [] };
     }
   } else if (
     agent.tools.length === 1 &&
     /** Legacy handling for `ocr` as may still exist in existing Agents */
     (agent.tools[0] === AgentCapabilities.context || agent.tools[0] === AgentCapabilities.ocr) &&
-    !mountSkillTools
+    !mountSkillTools &&
+    !mountPromptTools
   ) {
     return { toolDefinitions: [] };
   }
@@ -918,6 +939,8 @@ async function loadAgentTools({
         return includesWebSearch;
       } else if (skillTools.has(tool)) {
         return isPIAvailable;
+      } else if (promptTools.has(tool)) {
+        return isPIAvailable;
       } else if (galleryTools.has(tool)) {
         return true; // Gallery tools are always available
       } else if (!areToolsEnabled && !tool.includes(actionDelimiter)) {
@@ -930,6 +953,14 @@ async function loadAgentTools({
     for (const skillTool of skillTools) {
       if (!_agentTools.includes(skillTool)) {
         _agentTools.push(skillTool);
+      }
+    }
+  }
+
+  if (mountPromptTools) {
+    for (const promptTool of promptTools) {
+      if (!_agentTools.includes(promptTool)) {
+        _agentTools.push(promptTool);
       }
     }
   }
