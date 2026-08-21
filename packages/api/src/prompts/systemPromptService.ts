@@ -119,7 +119,11 @@ async function getAccessibleSystemPrompts(
   }
 
   const Model = getModel();
-  return Model.find({ _id: { $in: resourceIds } })
+  return Model.find({
+    _id: { $in: resourceIds },
+    piPrompt: true,
+    piSavePath: { $ne: '', $exists: true },
+  })
     .sort({ key: 1 })
     .lean();
 }
