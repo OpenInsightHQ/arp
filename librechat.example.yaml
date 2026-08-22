@@ -390,6 +390,10 @@ endpoints:
       # addParams:
       # safe_prompt: true # This field is specific to Mistral AI: https://docs.mistral.ai/api/
 
+      # PI backend context handoff. The request-level header takes precedence.
+      # piContextHandoff: true
+      # piMaxContextTokens: 90000
+
       # Drop Default params parameters from the request. See default params in guide linked below.
       # NOTE: For Mistral, it is necessary to drop the following parameters or you will encounter a 422 Error:
       dropParams: ['stop', 'user', 'frequency_penalty', 'presence_penalty']

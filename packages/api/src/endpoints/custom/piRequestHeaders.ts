@@ -1,3 +1,8 @@
+export type PiHeaderEndpoint = {
+  piContextHandoff?: string | boolean | null;
+  piMaxContextTokens?: string | number | null;
+};
+
 function buildPiForwardHeaders(
   existingHeaders: Record<string, string> | undefined,
   conversationId: string | undefined,
@@ -5,6 +10,8 @@ function buildPiForwardHeaders(
   userMessageId?: string,
   responseMessageId?: string,
   parentMessageId?: string,
+  endpoint?: PiHeaderEndpoint,
+  contextHandoff?: string | boolean | null,
 ) {
   return {
     ...(existingHeaders || {}),
@@ -16,6 +23,12 @@ function buildPiForwardHeaders(
     // persistence to the correct parent instead of inferring "last message"
     // (which can race/fork the tree, e.g. after an aborted turn).
     ...(parentMessageId ? { 'X-Parent-Message-Id': parentMessageId } : {}),
+    ...(contextHandoff != null || endpoint?.piContextHandoff != null
+      ? { 'X-PI-Context-Handoff': String(contextHandoff ?? endpoint?.piContextHandoff) }
+      : {}),
+    ...(endpoint?.piMaxContextTokens != null
+      ? { 'X-PI-Max-Context-Tokens': String(endpoint.piMaxContextTokens) }
+      : {}),
   };
 }
 
