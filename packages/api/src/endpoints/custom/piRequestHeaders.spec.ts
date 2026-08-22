@@ -26,4 +26,22 @@ describe('buildPiForwardHeaders', () => {
 
     expect(headers['Accept-Language']).toBeUndefined();
   });
+
+  it('forwards context handoff with the branch parent', () => {
+    const headers = buildPiForwardHeaders(
+      undefined,
+      'conv-1',
+      'zh-CN',
+      'user-1',
+      'assistant-1',
+      'parent-1',
+      { piContextHandoff: false },
+      true,
+    );
+
+    expect(headers).toMatchObject({
+      'X-Parent-Message-Id': 'parent-1',
+      'X-PI-Context-Handoff': 'true',
+    });
+  });
 });
