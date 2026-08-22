@@ -627,6 +627,8 @@ async function streamFromPI({ res, chatId, created, finalUserMessage, agentId, s
           prompt_tokens: piUsage.prompt_tokens || 0,
           completion_tokens: piUsage.completion_tokens || 0,
           total_tokens: piUsage.total_tokens || 0,
+          cache_read_tokens: piUsage.cache_read_tokens || 0,
+          cache_write_tokens: piUsage.cache_write_tokens || 0,
         },
       }) + '\n\n');
       if (typeof res.flush === 'function') {

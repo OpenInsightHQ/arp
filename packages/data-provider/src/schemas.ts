@@ -626,6 +626,8 @@ export const tMessageSchema = z.object({
   metadata: z.record(z.unknown()).optional(),
   tokenCount: z.number().optional(),
   inputTokenCount: z.number().optional(),
+  cacheReadTokens: z.number().optional(),
+  cacheWriteTokens: z.number().optional(),
 });
 
 export type MemoryArtifact = {

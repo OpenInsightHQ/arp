@@ -6,6 +6,7 @@ import { useGenerationsByLatest, useLocalize } from '~/hooks';
 import { Fork } from '~/components/Conversations';
 import MessageAudio from './MessageAudio';
 import Feedback from './Feedback';
+import TokenUsageTooltip from './TokenUsageTooltip';
 import { cn, formatDate } from '~/utils';
 import store from '~/store';
 
@@ -159,6 +160,8 @@ const HoverButtons = ({
   }
 
   const { isCreatedByUser, error } = message;
+  const isOnePIMessage =
+    !isCreatedByUser && message.endpoint === 'pi' && message.model === 'one-pi';
 
   if (error === true) {
     return (
@@ -279,13 +282,21 @@ const HoverButtons = ({
             !isLast && 'md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100',
           )}
         >
-          {/* Token Count - 仅输出 token 数 */}
-          {message.tokenCount != null && message.tokenCount > 0 && (
-            <span className="flex items-center gap-2">
-              <span title="输入 Token 数">In: {(message.inputTokenCount ?? 0).toLocaleString()}</span>
-              <span title="输出 Token 数">Out: {message.tokenCount.toLocaleString()}</span>
-            </span>
-          )}
+          {/* Token Count - ONE-PI 显示明细 Tooltip，其他 Agent 保持原有展示 */}
+          {message.tokenCount != null && message.tokenCount > 0 &&
+            (isOnePIMessage ? (
+              <TokenUsageTooltip
+                inputTokenCount={message.inputTokenCount}
+                tokenCount={message.tokenCount}
+                cacheReadTokens={message.cacheReadTokens}
+                cacheWriteTokens={message.cacheWriteTokens}
+              />
+            ) : (
+              <span className="flex items-center gap-2">
+                <span title="输入 Token 数">In: {(message.inputTokenCount ?? 0).toLocaleString()}</span>
+                <span title="输出 Token 数">Out: {message.tokenCount.toLocaleString()}</span>
+              </span>
+            ))}
 
           {/* Timestamp - 完整日期时间 */}
           {message.updatedAt && (
