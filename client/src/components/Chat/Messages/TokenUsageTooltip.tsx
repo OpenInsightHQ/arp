@@ -28,6 +28,15 @@ export default function TokenUsageTooltip({
   const cacheMiss = Math.max(0, input - cacheRead - cacheWrite);
   const cacheHitRate = input > 0 ? (cacheRead / input) * 100 : 0;
 
+  if (!hasCacheBreakdown) {
+    return (
+      <span className="flex items-center gap-2">
+        <span title="输入 Token 数">In: {formatTokens(input)}</span>
+        <span title="输出 Token 数">Out: {formatTokens(output)}</span>
+      </span>
+    );
+  }
+
   const detail = (
     <div className="w-72 space-y-3 p-1 text-sm">
       <div className="flex items-center justify-between border-b border-border-medium pb-2 font-medium">
