@@ -325,7 +325,7 @@ function createToolEndCallback({ req, res, artifactPromises, streamId = null, pi
    * Returns the canonical PI attachment record (file_id/filename/filepath with
    * the /arp/api/pi/files/download URL) or null.
    */
-  const stagePiCodeOutputLink = async ({ id, name, session_id, apiKey, metadata }) => {
+  const stagePiCodeOutputLink = async ({ id, name, session_id, apiKey, metadata, toolCallId }) => {
     try {
       const agentId = piAgentIdRef?.current || req._piAgentId || null;
       const conversationId = metadata?.thread_id;
@@ -356,7 +356,7 @@ function createToolEndCallback({ req, res, artifactPromises, streamId = null, pi
         type: 'application/octet-stream',
         conversationId,
         messageId: metadata.run_id,
-        toolCallId: metadata.tool_call_id,
+        toolCallId: toolCallId ?? null,
       };
     } catch (error) {
       logger.error('Error syncing code output to PI:', error);
@@ -527,6 +527,7 @@ function createToolEndCallback({ req, res, artifactPromises, streamId = null, pi
               session_id: output.artifact.session_id,
               apiKey: codeApiKey,
               metadata,
+              toolCallId: output.tool_call_id,
             });
             if (piAttachment) {
               if (!streamId && !res.headersSent) {

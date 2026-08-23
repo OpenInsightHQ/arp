@@ -1,5 +1,5 @@
 const { logger } = require('@librechat/data-schemas');
-const { Constants, ViolationTypes } = require('librechat-data-provider');
+const { Constants, ViolationTypes, ContentTypes } = require('librechat-data-provider');
 const {
   sendEvent,
   getViolationInfo,
@@ -30,6 +30,31 @@ function readStreamLog(client) {
   const log = collector.getLog();
   logger.info(`[StreamLog] readStreamLog: ${log.length} chars`);
   return log;
+}
+
+/**
+ * Append the staged pi file-links footer (req._piFileLinksText, staged by
+ * execute_skill and the execute_code pi sync) to the response message so the
+ * download links render on the page. Agent messages may be dual-content
+ * (content-parts array with empty `text`), so the footer is appended to BOTH
+ * `text` and a trailing text content part — same visible surface as the
+ * one-pi chat buildFileLinks markdown.
+ * @param {ServerRequest} req
+ * @param {Partial<TMessage>} response
+ */
+function appendPiFileLinks(req, response) {
+  const footer = req._piFileLinksText;
+  if (!footer) {
+    return;
+  }
+  delete req._piFileLinksText;
+  response.text = (response.text || '') + footer;
+  if (Array.isArray(response.content) && response.content.length > 0) {
+    response.content.push({
+      type: ContentTypes.TEXT,
+      [ContentTypes.TEXT]: { value: footer },
+    });
+  }
 }
 
 function createCloseHandler(abortController) {
@@ -328,14 +353,12 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
         // before the response is saved to the database, causing orphaned parentMessageIds.
         if (client.savedMessageIds && !client.savedMessageIds.has(messageId)) {
           // Append staged pi file-links footer (collectPiGeneratedFiles +
-          // buildPiFileDownloadUrl, staged by execute_skill) to the response
-          // text — same surface as the one-pi chat buildFileLinks, so download
-          // links are visible in the message body regardless of whether the
-          // LLM relayed them from the collapsed tool output.
-          if (req._piFileLinksText) {
-            response.text = (response.text || '') + req._piFileLinksText;
-            delete req._piFileLinksText;
-          }
+          // buildPiFileDownloadUrl, staged by execute_skill / execute_code pi
+          // sync) to the response text and content parts — same surface as
+          // the one-pi chat buildFileLinks, so download links are visible in
+          // the message body regardless of whether the LLM relayed them from
+          // the collapsed tool output.
+          appendPiFileLinks(req, response);
           await saveMessage(
             req,
             {
@@ -726,6 +749,7 @@ const _LegacyAgentController = async (req, res, next, initializeClient, addTitle
     if (!job.abortController.signal.aborted) {
       // Create a new response object with minimal copies
       const finalResponse = { ...response };
+      appendPiFileLinks(req, finalResponse);
 
       sendEvent(res, {
         final: true,
