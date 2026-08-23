@@ -10,7 +10,6 @@ import type { AppConfig } from '@librechat/data-schemas';
 import type { BaseInitializeParams, InitializeResultBase, EndpointTokenConfig } from '~/types';
 import { getOpenAIConfig } from '~/endpoints/openai/config';
 import { buildPiForwardHeaders } from './piRequestHeaders';
-import type { PiHeaderEndpoint } from './piRequestHeaders';
 import { getCustomEndpointConfig } from '~/app/config';
 import { fetchModels } from '~/endpoints/models';
 import { isUserProvided, checkUserKeyExpiry, getLangFromReq } from '~/utils';
@@ -185,8 +184,6 @@ export async function initializeCustom({
       bodyMessageId,
       derivedResponseMessageId,
       req.body?.parentMessageId as string | undefined,
-      endpoint as unknown as PiHeaderEndpoint,
-      req.body?.piContextHandoff as string | boolean | undefined,
     ),
   };
 

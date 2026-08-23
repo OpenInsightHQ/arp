@@ -334,8 +334,6 @@ export const endpointSchema = baseEndpointSchema.merge(
     customOrder: z.number().optional(),
     directEndpoint: z.boolean().optional(),
     titleMessageRole: z.string().optional(),
-    piContextHandoff: z.union([z.boolean(), z.string()]).optional(),
-    piMaxContextTokens: z.union([z.number().int().positive(), z.string()]).optional(),
   }),
 );
 

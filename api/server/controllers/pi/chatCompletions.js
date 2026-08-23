@@ -11,12 +11,6 @@ const {
   getMessagesThroughTarget,
 } = require('~/server/utils/galleryArtifactIdentity');
 const {
-  estimateTokens,
-  truncateTextToTokenBudget,
-  getPiMaxContextTokens,
-  getPiReservedTokens,
-} = require('./contextBudget');
-const {
   appendGalleryVersion,
   upsertGallerySqlQueries,
 } = require('~/server/services/Artifacts/galleryPublishing');
@@ -697,8 +691,6 @@ const piChatCompletionsController = async (req, res) => {
   // Frontend-known message-tree mount point; forwarded to pi so persistence
   // pins to the correct parent instead of inferring "last message".
   const parentMessageId = req.headers['x-parent-message-id'] || undefined;
-  const maxContextTokens = getPiMaxContextTokens(req.headers['x-pi-max-context-tokens']);
-  const reservedTokens = Math.min(getPiReservedTokens(), Math.floor(maxContextTokens / 2));
 
   const solidHandled = await handleSolidificationRequest({
     userMessage,
@@ -713,16 +705,12 @@ const piChatCompletionsController = async (req, res) => {
 
   const lang = getLangFromReq(req);
   const systemPrompt = await getPiSystemPrompt(lang);
-  const availableInputTokens = Math.max(1, maxContextTokens - reservedTokens);
-  const systemPromptTokens = estimateTokens(systemPrompt || '');
-  const userMessageBudget = Math.max(1, availableInputTokens - systemPromptTokens);
-  const finalUserMessage = truncateTextToTokenBudget(userMessage, userMessageBudget);
 
   const streamStartTime = Date.now();
 
   if (!stream) {
     return runNonStreamingPI({
-      finalUserMessage,
+      finalUserMessage: userMessage,
       agentId,
       sessionId,
       userId,
@@ -742,7 +730,7 @@ const piChatCompletionsController = async (req, res) => {
     res,
     chatId,
     created,
-    finalUserMessage,
+    finalUserMessage: userMessage,
     agentId,
     sessionId,
     userId,

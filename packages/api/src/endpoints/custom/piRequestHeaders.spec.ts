@@ -26,23 +26,4 @@ describe('buildPiForwardHeaders', () => {
 
     expect(headers['Accept-Language']).toBeUndefined();
   });
-
-  it('forwards context handoff and token budget with the branch parent', () => {
-    const headers = buildPiForwardHeaders(
-      undefined,
-      'conv-1',
-      'zh-CN',
-      'user-1',
-      'assistant-1',
-      'parent-1',
-      { piContextHandoff: false, piMaxContextTokens: 64000 },
-      true,
-    );
-
-    expect(headers).toMatchObject({
-      'X-Parent-Message-Id': 'parent-1',
-      'X-PI-Context-Handoff': 'true',
-      'X-PI-Max-Context-Tokens': '64000',
-    });
-  });
 });
