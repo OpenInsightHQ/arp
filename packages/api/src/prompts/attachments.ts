@@ -63,7 +63,7 @@ export function buildPiAttachmentsPrompt(files: PiSessionFile[]): string | null 
       : '';
 
   const textRule = hasTextFiles
-    ? '- Files marked kind="text": read with the read_text_file tool, passing the <path> value EXACTLY as listed (workspace-relative, e.g. report.pdf → never /mnt/data/ paths).'
+    ? '- Files marked kind="text": read with the read_text_file tool, passing the <path> value EXACTLY as listed (workspace-relative, e.g. notes.txt, data/values.csv — never /mnt/data/ paths).'
     : '';
 
   return `<attachments>
