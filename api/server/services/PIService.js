@@ -654,13 +654,15 @@ const listPiFiles = async (agentId, sessionId, userId, modifiedSince) => {
       .filter((f) => !f.isDirectory)
       .map((f) => {
         const filePath = f.path || f.name;
+        const mimeType = f.mimeType || null;
         return {
           name: (filePath || '').split('/').pop(),
           path: filePath,
           url: buildPiFileDownloadUrl(agentId, sessionId, filePath),
-          mimeType: f.mimeType || null,
+          mimeType,
           size: f.size || null,
           lastModified: f.lastModified || null,
+          isText: isTextFile(filePath || '', mimeType),
         };
       });
   } catch (error) {

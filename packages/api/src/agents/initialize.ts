@@ -306,26 +306,30 @@ export async function initializeAgent(
    * (agent.id, conversationId). The inventory is fetched once by the JS
    * caller via PIService.listPiFiles and passed here as `piAttachmentFiles`.
    * When present on the primary agent (non-pi endpoint):
-   * - append the `<attachments>` section to the system prompt describing the
-   *   file inventory
-   * - mount the `read_text_file` tool so the LLM can read text files
-   * Non-text files are handled by configured skills or the execute_code tool.
+   * - append the `<attachments>` section to the system prompt, tagging each
+   *   file kind="text"/"binary" with per-kind tool rules
+   * - mount the `read_text_file` tool ONLY when at least one text file
+   *   exists (binary-only workspaces never expose it, so the model cannot
+   *   waste a call on it)
+   * Binary files are handled by execute_skill (preferred) or execute_code.
    * The PI endpoint itself is skipped: pi manages its own file attachments.
    */
   if (isInitialAgent === true && String(endpointOption?.endpoint) !== 'pi') {
-    const attachmentsPrompt = buildPiAttachmentsPrompt(piAttachmentFiles ?? []);
+    const attachments = piAttachmentFiles ?? [];
+    const attachmentsPrompt = buildPiAttachmentsPrompt(attachments);
     if (attachmentsPrompt) {
       const piRequest = req as ServerRequest & {
         _piAttachmentFiles?: PiSessionFile[];
         _piAgentId?: string;
       };
-      piRequest._piAttachmentFiles = piAttachmentFiles;
+      piRequest._piAttachmentFiles = attachments;
       piRequest._piAgentId = agent.id;
       agent.additional_instructions = appendUniquePrompt(
         agent.additional_instructions,
         attachmentsPrompt,
       );
-      if (!(agent.tools ?? []).includes('read_text_file')) {
+      const hasTextFiles = attachments.some((file) => file.isText !== false);
+      if (hasTextFiles && !(agent.tools ?? []).includes('read_text_file')) {
         agent.tools = [...(agent.tools ?? []), 'read_text_file'];
       }
     }

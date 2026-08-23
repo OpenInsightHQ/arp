@@ -320,6 +320,8 @@ const createPITools = (options = {}) => {
 
 Use this tool when the user's request matches one of the skills listed in the <available_skills> section of the system prompt (match by the skill description's usage cues).
 
+For files from the <attachments> workspace: PREFER this tool over execute_code when a listed skill matches the task (especially for kind="binary" files such as xlsx, docx, pdf); fall back to execute_code only when no listed skill matches.
+
 Rules:
 - skillName MUST be one of the names listed in <available_skills>.
 - Pass the user's request in 'input' exactly as stated, without interpretation or restructuring.
@@ -469,9 +471,9 @@ Rules:
 Use this tool when you need the content of one of the files listed in the <attachments> section of the system prompt (also referenced by the user as [附件:filename] or [Attachment:filename]).
 
 Rules:
-- path MUST be one of the <path> values listed in <attachments>, passed EXACTLY as listed (workspace-relative, e.g. report.pdf, data/values.csv). Do not invent paths.
+- path MUST be one of the <path> values listed in <attachments> with kind="text", passed EXACTLY as listed (workspace-relative, e.g. report.txt, data/values.csv). Do not invent paths.
+- NEVER call this tool on kind="binary" files (xlsx/xls, docx/pptx, pdf, png/jpg and other images, audio/video, zip and other archives): it only returns an error. Use execute_skill (preferred) or execute_code for those instead.
 - Do NOT pass /mnt/data/... paths: that prefix only exists inside the execute_code sandbox, not in this workspace.
-- Only text files can be read. Binary/non-text files (images, PDF, office documents, archives, ...) must be processed with the execute_code tool or a configured skill instead.
 - Returns the file content; use it to fulfill the user's request.`,
     schema: z.object({
       path: z

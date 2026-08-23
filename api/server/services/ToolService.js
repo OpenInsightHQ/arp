@@ -432,6 +432,27 @@ const piAttachmentTools = new Set(['read_text_file']);
 const hasPiAttachments = (req) =>
   Array.isArray(req?._piAttachmentFiles) && req._piAttachmentFiles.length > 0;
 
+/** Tool preference ordering: execute_skill before execute_code so models
+ *  prefer skills for workspace-file tasks (esp. binary files) and only fall
+ *  back to raw code execution when no listed skill matches. */
+const orderToolsByPreference = (tools) => {
+  const preference = ['execute_skill', Tools.execute_code];
+  return [...tools].sort((a, b) => {
+    const ai = preference.indexOf(a);
+    const bi = preference.indexOf(b);
+    if (ai === -1 && bi === -1) {
+      return 0;
+    }
+    if (ai === -1) {
+      return 1;
+    }
+    if (bi === -1) {
+      return -1;
+    }
+    return ai - bi;
+  });
+};
+
 /** Gallery SQL tools - removed save_report_sql (publish API handles SQL extraction automatically) */
 const galleryTools = new Set([]);
 
@@ -575,6 +596,9 @@ async function loadToolDefinitionsWrapper({
   if (!filteredTools || filteredTools.length === 0) {
     return { toolDefinitions: [] };
   }
+
+  /** Stable sort: execute_skill listed before execute_code */
+  orderToolsByPreference(filteredTools);
 
   /** @type {Record<string, Record<string, string>>} */
   let userMCPAuthMap;
@@ -1016,6 +1040,10 @@ async function loadAgentTools({
   if (!_agentTools || _agentTools.length === 0) {
     return {};
   }
+
+  /** Stable sort: execute_skill listed before execute_code */
+  orderToolsByPreference(_agentTools);
+
   /** @type {ReturnType<typeof createOnSearchResults>} */
   let webSearchCallbacks;
   if (includesWebSearch) {
