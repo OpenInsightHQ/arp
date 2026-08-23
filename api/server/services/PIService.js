@@ -567,6 +567,21 @@ const buildSkillMessage = (skillName, input) => {
 };
 
 /**
+ * Rewrite execute_code sandbox paths (/mnt/data/<name>) found in skill input
+ * to workspace-relative names. Skills run on the pi backend against the
+ * workspace, where /mnt/data/ does not exist — LLMs sometimes copy the
+ * execute_code toolContext paths into execute_skill input, which would make
+ * the skill look for a nonexistent location. Normalization is deterministic
+ * so every slip is corrected regardless of prompt compliance.
+ */
+const sanitizeSkillInput = (input) => {
+  if (typeof input !== 'string') {
+    return input;
+  }
+  return input.replace(/\/mnt\/data\/([^\s'"`),;]+)/gi, (_match, name) => name);
+};
+
+/**
  * Read a system prompt's content by key for the read_prompt tool call.
  * Access is granted when the user holds VIEW permission on the prompt
  * (resourceType `systemPrompt`) or when the key is configured on the
@@ -896,7 +911,8 @@ const executeSkill = async (
   }
 
   const finalAgentId = agentId || 'default';
-  const message = buildSkillMessage(skillName, input);
+  const effectiveInput = sanitizeSkillInput(input || '');
+  const message = buildSkillMessage(skillName, effectiveInput);
   const startedAt = new Date();
 
   // Skills commonly run for minutes. Stream live output up to a deadline,
@@ -922,7 +938,7 @@ const executeSkill = async (
       },
       body: JSON.stringify({
         skillName,
-        input: input || '',
+        input: effectiveInput,
         agentId: finalAgentId,
         sessionId,
         stream: true,

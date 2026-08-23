@@ -76,6 +76,7 @@ Usage rules:
 ${textRule}
 - Files marked kind="binary" (e.g. xlsx/xls, docx/pptx, pdf, images, audio/video, archives): NEVER call read_text_file on them — it will only return an error. Process them with execute_skill or execute_code instead.
 - Tool preference for kind="binary" files: FIRST try execute_skill if any skill listed in <available_skills> matches the task (e.g. document/data processing skills); only fall back to execute_code when no listed skill matches.
+- When invoking execute_skill, reference files in the input by their workspace <path> exactly as listed above (e.g. 111.xlsx). NEVER use /mnt/data/... paths in skill input — skills run against the workspace, where /mnt/data/ does not exist.
 - Inside execute_code the same files are mounted under /mnt/data/<name>; /mnt/data/ paths are valid ONLY inside execute_code code.
 </attachments>`;
 }

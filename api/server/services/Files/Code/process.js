@@ -474,7 +474,7 @@ const primeFiles = async (options, apiKey) => {
     if (!toolContext) {
       toolContext = `- Note: The following files are available in the "${Tools.execute_code}" tool environment:`;
     }
-    toolContext += `\n\t- /mnt/data/${piFile.name} (workspace file "${piFile.name}"; /mnt/data/ paths are valid ONLY inside execute_code code — never pass them to read_text_file)`;
+    toolContext += `\n\t- /mnt/data/${piFile.name} (workspace file "${piFile.name}"; /mnt/data/ paths are valid ONLY inside execute_code code — never mention them to read_text_file, execute_skill, or the user; outside execute_code always refer to the file as "${piFile.name}")`;
     files.push(piFile);
   }
 
