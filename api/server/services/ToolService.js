@@ -416,6 +416,7 @@ const nativeTools = new Set([
   Tools.web_search,
   'execute_skill',
   'read_prompt',
+  'read_text_file',
 ]);
 
 /** Skill execution tool - mounted for any agent with non-empty skills when PI is configured */
@@ -423,6 +424,13 @@ const skillTools = new Set(['execute_skill']);
 
 /** Prompt reading tool - mounted for any agent with knowledgePromptKeys when PI is configured */
 const promptTools = new Set(['read_prompt']);
+
+/** PI workspace text file reading tool - mounted when the session has <attachments> files */
+const piAttachmentTools = new Set(['read_text_file']);
+
+/** Checks whether the current request carries PI workspace attachment files */
+const hasPiAttachments = (req) =>
+  Array.isArray(req?._piAttachmentFiles) && req._piAttachmentFiles.length > 0;
 
 /** Gallery SQL tools - removed save_report_sql (publish API handles SQL extraction automatically) */
 const galleryTools = new Set([]);
@@ -465,8 +473,15 @@ async function loadToolDefinitionsWrapper({
   const mountSkillTools = agent.skills?.length > 0 && isPIConfigured(req);
   /** read_prompt is mounted on agents with knowledgePromptKeys even when agent.tools is empty */
   const mountPromptTools = agent.knowledgePromptKeys?.length > 0 && isPIConfigured(req);
+  /** read_text_file is mounted when the PI workspace has attachment files for this session */
+  const mountPiAttachmentTools = isPIConfigured(req) && hasPiAttachments(req);
 
-  if ((!agent.tools || agent.tools.length === 0) && !mountSkillTools && !mountPromptTools) {
+  if (
+    (!agent.tools || agent.tools.length === 0) &&
+    !mountSkillTools &&
+    !mountPromptTools &&
+    !mountPiAttachmentTools
+  ) {
     return { toolDefinitions: [] };
   }
 
@@ -474,7 +489,8 @@ async function loadToolDefinitionsWrapper({
     agent.tools?.length === 1 &&
     (agent.tools[0] === AgentCapabilities.context || agent.tools[0] === AgentCapabilities.ocr) &&
     !mountSkillTools &&
-    !mountPromptTools
+    !mountPromptTools &&
+    !mountPiAttachmentTools
   ) {
     return { toolDefinitions: [] };
   }
@@ -512,6 +528,9 @@ async function loadToolDefinitionsWrapper({
       if (promptTools.has(tool)) {
         return isPIAvailable;
       }
+      if (piAttachmentTools.has(tool)) {
+        return isPIAvailable && hasPiAttachments(req);
+      }
       if (galleryTools.has(tool)) {
         return true; // Gallery tools are always available
       }
@@ -533,6 +552,14 @@ async function loadToolDefinitionsWrapper({
     for (const promptTool of promptTools) {
       if (!filteredTools.includes(promptTool)) {
         filteredTools.push(promptTool);
+      }
+    }
+  }
+
+  if (mountPiAttachmentTools) {
+    for (const piAttachmentTool of piAttachmentTools) {
+      if (!filteredTools.includes(piAttachmentTool)) {
+        filteredTools.push(piAttachmentTool);
       }
     }
   }
@@ -776,7 +803,7 @@ async function loadToolDefinitionsWrapper({
 
       if (codeApiKey) {
         const { toolContext } = await primeCodeFiles(
-          { req, tool_resources, agentId: agent.id },
+          { req, tool_resources, agentId: agent.id, conversationId },
           codeApiKey,
         );
         if (toolContext) {
@@ -884,9 +911,11 @@ async function loadAgentTools({
   const mountSkillTools = agent.skills?.length > 0 && isPIConfigured(req);
   /** read_prompt is mounted on agents with knowledgePromptKeys even when agent.tools is empty */
   const mountPromptTools = agent.knowledgePromptKeys?.length > 0 && isPIConfigured(req);
+  /** read_text_file is mounted when the PI workspace has attachment files for this session */
+  const mountPiAttachmentTools = isPIConfigured(req) && hasPiAttachments(req);
 
   if (!agent.tools || agent.tools.length === 0) {
-    if (!mountSkillTools && !mountPromptTools) {
+    if (!mountSkillTools && !mountPromptTools && !mountPiAttachmentTools) {
       return { toolDefinitions: [] };
     }
   } else if (
@@ -894,7 +923,8 @@ async function loadAgentTools({
     /** Legacy handling for `ocr` as may still exist in existing Agents */
     (agent.tools[0] === AgentCapabilities.context || agent.tools[0] === AgentCapabilities.ocr) &&
     !mountSkillTools &&
-    !mountPromptTools
+    !mountPromptTools &&
+    !mountPiAttachmentTools
   ) {
     return { toolDefinitions: [] };
   }
@@ -941,6 +971,8 @@ async function loadAgentTools({
         return isPIAvailable;
       } else if (promptTools.has(tool)) {
         return isPIAvailable;
+      } else if (piAttachmentTools.has(tool)) {
+        return isPIAvailable && hasPiAttachments(req);
       } else if (galleryTools.has(tool)) {
         return true; // Gallery tools are always available
       } else if (!areToolsEnabled && !tool.includes(actionDelimiter)) {
@@ -961,6 +993,14 @@ async function loadAgentTools({
     for (const promptTool of promptTools) {
       if (!_agentTools.includes(promptTool)) {
         _agentTools.push(promptTool);
+      }
+    }
+  }
+
+  if (mountPiAttachmentTools) {
+    for (const piAttachmentTool of piAttachmentTools) {
+      if (!_agentTools.includes(piAttachmentTool)) {
+        _agentTools.push(piAttachmentTool);
       }
     }
   }

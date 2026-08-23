@@ -34,7 +34,12 @@ import {
 } from '~/utils';
 import { filterFilesByEndpointConfig } from '~/files';
 import { appendUniquePrompt, buildVisualizationPrompt, generateArtifactsPrompt } from '~/prompts';
-import { buildAvailableSkillsPrompt, buildAvailablePromptsPrompt } from '~/prompts';
+import {
+  buildAvailableSkillsPrompt,
+  buildAvailablePromptsPrompt,
+  buildPiAttachmentsPrompt,
+} from '~/prompts';
+import type { PiSessionFile } from '~/prompts';
 import { getSystemPromptOrSeed } from '~/prompts';
 import { getProviderConfig } from '~/endpoints';
 import { primeResources } from './resources';
@@ -79,6 +84,13 @@ export interface InitializeAgentParams {
   parentMessageId?: string | null;
   /** Request files */
   requestFiles?: IMongoFile[];
+  /**
+   * PI workspace attachment inventory for this conversation (agent/model
+   * endpoints), fetched once by the JS layer via PIService.listPiFiles.
+   * When non-empty the primary agent gets the `<attachments>` system-prompt
+   * section and the read_text_file tool mounted.
+   */
+  piAttachmentFiles?: PiSessionFile[];
   /** Function to load agent tools */
   loadTools?: (params: {
     req: ServerRequest;
@@ -165,6 +177,7 @@ export async function initializeAgent(
     parentMessageId,
     allowedProviders,
     isInitialAgent = false,
+    piAttachmentFiles,
   } = params;
 
   if (!db) {
@@ -287,6 +300,37 @@ export async function initializeAgent(
     requestFileSet: new Set(requestFiles?.map((file) => file.file_id)),
   });
 
+  /**
+   * PI workspace attachments (agent/model endpoints): files uploaded through
+   * the unified PI attachment flow live in the PI workspace keyed by
+   * (agent.id, conversationId). The inventory is fetched once by the JS
+   * caller via PIService.listPiFiles and passed here as `piAttachmentFiles`.
+   * When present on the primary agent (non-pi endpoint):
+   * - append the `<attachments>` section to the system prompt describing the
+   *   file inventory
+   * - mount the `read_text_file` tool so the LLM can read text files
+   * Non-text files are handled by configured skills or the execute_code tool.
+   * The PI endpoint itself is skipped: pi manages its own file attachments.
+   */
+  if (isInitialAgent === true && String(endpointOption?.endpoint) !== 'pi') {
+    const attachmentsPrompt = buildPiAttachmentsPrompt(piAttachmentFiles ?? []);
+    if (attachmentsPrompt) {
+      const piRequest = req as ServerRequest & {
+        _piAttachmentFiles?: PiSessionFile[];
+        _piAgentId?: string;
+      };
+      piRequest._piAttachmentFiles = piAttachmentFiles;
+      piRequest._piAgentId = agent.id;
+      agent.additional_instructions = appendUniquePrompt(
+        agent.additional_instructions,
+        attachmentsPrompt,
+      );
+      if (!(agent.tools ?? []).includes('read_text_file')) {
+        agent.tools = [...(agent.tools ?? []), 'read_text_file'];
+      }
+    }
+  }
+
   const {
     toolRegistry,
     toolContextMap,
@@ -408,9 +452,7 @@ export async function initializeAgent(
 
   if (typeof agent.artifacts === 'string' && agent.artifacts !== '') {
     const artifactsKey =
-      agent.provider === EModelEndpoint.anthropic
-        ? 'artifacts.anthropic'
-        : 'artifacts.openai';
+      agent.provider === EModelEndpoint.anthropic ? 'artifacts.anthropic' : 'artifacts.openai';
     const [dbArtifactsPrompt, dbShadcnPrefix] = await Promise.all([
       getSystemPromptOrSeed(artifactsKey),
       getSystemPromptOrSeed('artifacts.shadcn_prefix'),
@@ -432,13 +474,11 @@ export async function initializeAgent(
       }
     | undefined;
 
-
   // 替换 {{keyword_definition}}
   const keywordDefinitions = requestBody?.keywordDefinitions;
   if (agent.instructions && /{{keyword_definition}}/i.test(agent.instructions)) {
-    const keywordDefText = keywordDefinitions && keywordDefinitions.length > 0
-      ? keywordDefinitions.join(',')
-      : '';
+    const keywordDefText =
+      keywordDefinitions && keywordDefinitions.length > 0 ? keywordDefinitions.join(',') : '';
     agent.instructions = agent.instructions.replace(/{{keyword_definition}}/gi, keywordDefText);
   }
 
@@ -459,12 +499,16 @@ export async function initializeAgent(
             'X-Agent-Id': agentId,
           },
         });
-        const updatedExamplesText = typeof response.data?.data === 'string'
-          ? response.data.data
-          : response.data?.data != null
-            ? JSON.stringify(response.data.data)
-            : '';
-        agent.instructions = agent.instructions.replace(/{{updated_examples}}/gi, updatedExamplesText);
+        const updatedExamplesText =
+          typeof response.data?.data === 'string'
+            ? response.data.data
+            : response.data?.data != null
+              ? JSON.stringify(response.data.data)
+              : '';
+        agent.instructions = agent.instructions.replace(
+          /{{updated_examples}}/gi,
+          updatedExamplesText,
+        );
       } catch (err) {
         console.error('[initialize] Failed to fetch updated examples from DMP:', err);
         agent.instructions = agent.instructions.replace(/{{updated_examples}}/gi, '');

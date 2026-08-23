@@ -295,8 +295,22 @@ const executeCodeStream = async (
   );
 };
 
+/**
+ * Uploads a file to the PI workspace, either from a path on disk or from an
+ * in-memory buffer (used by execute_code output syncing).
+ * @param {Object} args
+ * @param {string} [args.filePath] - Path on disk to upload (mutually exclusive with buffer).
+ * @param {Buffer} [args.buffer] - In-memory buffer to upload (mutually exclusive with filePath).
+ * @param {string} [args.filename] - Filename for the buffer variant.
+ * @param {string} args.sessionId
+ * @param {string} args.agentId
+ * @param {string} [args.path] - Optional relative path in the workspace.
+ * @param {string} [args.originalFilename]
+ * @param {string} [userId]
+ * @returns {Promise<{success: boolean; data?: object; error?: string}>}
+ */
 const uploadFile = async (
-  { filePath, sessionId, agentId, path: uploadPath, originalFilename },
+  { filePath, buffer, filename, sessionId, agentId, path: uploadPath, originalFilename },
   userId,
 ) => {
   if (!isPIConfigured()) {
@@ -309,6 +323,10 @@ const uploadFile = async (
 
   if (!agentId) {
     return { success: false, error: 'agentId is required for PI upload' };
+  }
+
+  if (!filePath && buffer == null) {
+    return { success: false, error: 'filePath or buffer is required for PI upload' };
   }
 
   const axios = createAxiosInstance();
@@ -324,20 +342,29 @@ const uploadFile = async (
 
   try {
     const form = new FormData();
-    form.append('file', fs.createReadStream(filePath));
+    if (buffer != null) {
+      const effectiveName = filename || originalFilename || 'file';
+      form.append('file', buffer, {
+        filename: effectiveName,
+        contentType: 'application/octet-stream',
+      });
+    } else {
+      form.append('file', fs.createReadStream(filePath));
+    }
     form.append('sessionId', sessionId);
     form.append('agentId', agentId);
     if (uploadPath) {
       form.append('path', uploadPath);
     }
-    if (originalFilename) {
-      form.append('originalFilename', originalFilename);
+    const effectiveOriginalName = originalFilename || filename;
+    if (effectiveOriginalName) {
+      form.append('originalFilename', effectiveOriginalName);
     }
 
     const uploadUrl = `${PI_HOST}/upload`;
     logger.info(`[PIService] uploadFile: POST ${uploadUrl}`);
     logger.info(
-      `[PIService] uploadFile params: sessionId=${sessionId}, agentId=${agentId}, path=${uploadPath || '(root)'}, originalFilename=${originalFilename || '(none)'}`,
+      `[PIService] uploadFile params: sessionId=${sessionId}, agentId=${agentId}, path=${uploadPath || '(root)'}, source=${buffer != null ? 'buffer' : filePath}, originalFilename=${effectiveOriginalName || '(none)'}`,
     );
 
     const response = await axios.post(uploadUrl, form, {
@@ -345,7 +372,9 @@ const uploadFile = async (
         ...headers,
         ...form.getHeaders(),
       },
-      timeout: 60000,
+      timeout: 120000,
+      maxContentLength: Infinity,
+      maxBodyLength: Infinity,
     });
 
     logger.info(`[PIService] uploadFile success: ${JSON.stringify(response.data)}`);
@@ -390,7 +419,16 @@ const getPIFiles = async ({ sessionId }, userId) => {
   }
 };
 
-const downloadPIFile = async ({ sessionId, filename, agentId }, userId) => {
+/**
+ * Downloads a file from the pi workspace.
+ * @param {Object} args
+ * @param {string} args.sessionId
+ * @param {string} [args.filename] - Filename (flat lookup).
+ * @param {string} [args.path] - Workspace path (supports nested files); preferred over filename.
+ * @param {string} [args.agentId]
+ * @param {string} [userId]
+ */
+const downloadPIFile = async ({ sessionId, filename, agentId, path: filePath }, userId) => {
   if (!isPIConfigured()) {
     return { success: false, error: 'PI not configured' };
   }
@@ -410,7 +448,8 @@ const downloadPIFile = async ({ sessionId, filename, agentId }, userId) => {
       params: {
         agentId: effectiveAgentId,
         sessionId,
-        filename,
+        ...(filename != null ? { filename } : {}),
+        ...(filePath != null ? { path: filePath } : {}),
       },
       headers,
       responseType: 'arraybuffer',
@@ -578,23 +617,18 @@ const readPrompt = async ({ key, userId, agentId }) => {
 };
 
 /**
- * Canonical pi file download link shared by every consumer
- * (collectPiGeneratedFiles, one-pi buildFileLinks, execute_skill tool
- * results, GallerySkillTaskRun.files) so all surfaces emit identical URLs.
- */
-const buildPiFileDownloadUrl = (agentId, sessionId, path) =>
-  `/arp/api/pi/files/download?agentId=${encodeURIComponent(String(agentId))}&sessionId=${encodeURIComponent(String(sessionId))}&path=${encodeURIComponent(String(path))}`;
-
-/**
- * List files generated in a pi session (recursive, optionally filtered by
- * mtime) as structured records with download URLs.
+ * Canonical recursive pi workspace file listing shared by every consumer
+ * (collectPiGeneratedFiles, <attachments> prompts, execute_code syncing,
+ * the read_text_file tool). Returns normalized records with canonical
+ * download URLs (buildPiFileDownloadUrl).
  *
- * Single shared implementation for all pi file-collection consumers:
- * - execute_skill tool results (files attached to the agent message)
- * - GallerySkillTaskRun.files
- * - one-pi chat buildFileLinks
+ * @param {string} agentId
+ * @param {string} sessionId
+ * @param {string} [userId]
+ * @param {string|Date} [modifiedSince] - optional mtime filter
+ * @returns {Promise<Array<{name: string; path: string; url: string; mimeType: string|null; size: number|null; lastModified: string|null}>>}
  */
-const collectPiGeneratedFiles = async (agentId, sessionId, userId, modifiedSince) => {
+const listPiFiles = async (agentId, sessionId, userId, modifiedSince) => {
   if (!agentId || !sessionId) {
     return [];
   }
@@ -611,9 +645,7 @@ const collectPiGeneratedFiles = async (agentId, sessionId, userId, modifiedSince
     });
 
     if (!response.ok) {
-      logger.warn('[PIService] collectPiGeneratedFiles: PI files API returned', {
-        status: response.status,
-      });
+      logger.warn('[PIService] listPiFiles: PI files API returned', { status: response.status });
       return [];
     }
 
@@ -628,13 +660,162 @@ const collectPiGeneratedFiles = async (agentId, sessionId, userId, modifiedSince
           url: buildPiFileDownloadUrl(agentId, sessionId, filePath),
           mimeType: f.mimeType || null,
           size: f.size || null,
+          lastModified: f.lastModified || null,
         };
       });
   } catch (error) {
-    logger.warn('[PIService] collectPiGeneratedFiles failed:', { error: error.message });
+    logger.warn('[PIService] listPiFiles failed:', { error: error.message });
     return [];
   }
 };
+
+const TEXT_EXTENSIONS = new Set([
+  '.txt',
+  '.md',
+  '.markdown',
+  '.csv',
+  '.tsv',
+  '.json',
+  '.jsonl',
+  '.yaml',
+  '.yml',
+  '.xml',
+  '.html',
+  '.htm',
+  '.css',
+  '.js',
+  '.mjs',
+  '.cjs',
+  '.jsx',
+  '.ts',
+  '.tsx',
+  '.py',
+  '.rb',
+  '.go',
+  '.rs',
+  '.java',
+  '.kt',
+  '.c',
+  '.h',
+  '.cpp',
+  '.hpp',
+  '.cs',
+  '.php',
+  '.sh',
+  '.bash',
+  '.zsh',
+  '.sql',
+  '.ini',
+  '.cfg',
+  '.conf',
+  '.toml',
+  '.env',
+  '.log',
+  '.svg',
+  '.graphql',
+  '.proto',
+  '.vue',
+  '.svelte',
+]);
+
+const TEXT_MIME_PREFIXES = [
+  'text/',
+  'application/json',
+  'application/xml',
+  'application/javascript',
+  'application/x-yaml',
+  'application/yaml',
+];
+
+const isTextFile = (filename, mimeType) => {
+  if (mimeType && TEXT_MIME_PREFIXES.some((prefix) => mimeType.startsWith(prefix))) {
+    return true;
+  }
+  const dot = filename.lastIndexOf('.');
+  if (dot === -1) {
+    return false;
+  }
+  return TEXT_EXTENSIONS.has(filename.slice(dot).toLowerCase());
+};
+
+const READ_TEXT_MAX_BYTES = 2 * 1024 * 1024;
+const READ_TEXT_MAX_CHARS = 100_000;
+
+/**
+ * Normalize a path passed to the read_text_file tool to the pi workspace
+ * namespace. LLMs frequently confuse the execute_code sandbox namespace
+ * (/mnt/data/<name>) with workspace-relative paths, so both a leading
+ * /mnt/data/ segment and any leading slashes are stripped.
+ */
+const normalizePiWorkspacePath = (filePath) =>
+  String(filePath)
+    .replace(/^\/mnt\/data\//i, '')
+    .replace(/^\/+/, '');
+
+/**
+ * Read a text file from the pi workspace for the read_text_file tool.
+ * Downloads the file bytes from pi over HTTP (downloadPIFile) into memory —
+ * no local filesystem or temp dir involved. Only text files are readable,
+ * binary types must go through execute_code or configured skills.
+ */
+const readPiTextFile = async ({ agentId, sessionId, path: filePath }, userId) => {
+  if (!filePath) {
+    return { success: false, error: 'path is required' };
+  }
+
+  const normalizedPath = normalizePiWorkspacePath(filePath);
+  const download = await downloadPIFile({ agentId, sessionId, path: normalizedPath }, userId);
+  if (!download.success) {
+    return {
+      success: false,
+      error: `Failed to read "${filePath}": ${download.error}. Use the <path> values listed in the <attachments> section of the system prompt (workspace-relative paths, not /mnt/data/ paths).`,
+    };
+  }
+
+  const { buffer, mimeType } = download.data;
+  if (!isTextFile(normalizedPath, mimeType)) {
+    return {
+      success: false,
+      error: `"${normalizedPath}" is not a text file. Only text files can be read with this tool; process other file types via execute_code or a configured skill.`,
+    };
+  }
+  if (buffer.length > READ_TEXT_MAX_BYTES) {
+    return {
+      success: false,
+      error: `"${normalizedPath}" is too large to read (${buffer.length} bytes, max ${READ_TEXT_MAX_BYTES}). Use execute_code to process it instead.`,
+    };
+  }
+
+  let content = buffer.toString('utf-8');
+  if (content.length > READ_TEXT_MAX_CHARS) {
+    content =
+      content.slice(0, READ_TEXT_MAX_CHARS) +
+      `\n\n[... truncated at ${READ_TEXT_MAX_CHARS} characters]`;
+  }
+  return { success: true, data: { path: normalizedPath, content } };
+};
+
+/**
+ * Canonical pi file download link shared by every consumer
+ * (collectPiGeneratedFiles, one-pi buildFileLinks, execute_skill tool
+ * results, GallerySkillTaskRun.files) so all surfaces emit identical URLs.
+ */
+const buildPiFileDownloadUrl = (agentId, sessionId, path) =>
+  `/arp/api/pi/files/download?agentId=${encodeURIComponent(String(agentId))}&sessionId=${encodeURIComponent(String(sessionId))}&path=${encodeURIComponent(String(path))}`;
+
+/**
+ * List files generated in a pi session (recursive, optionally filtered by
+ * mtime) as structured records with download URLs.
+ *
+ * Thin wrapper over the canonical listPiFiles, kept for existing consumers:
+ * - execute_skill tool results (files attached to the agent message)
+ * - GallerySkillTaskRun.files
+ * - one-pi chat buildFileLinks
+ */
+const collectPiGeneratedFiles = (agentId, sessionId, userId, modifiedSince) =>
+  listPiFiles(agentId, sessionId, userId, modifiedSince).then((files) =>
+    files.map(({ lastModified: _lastModified, ...file }) => file),
+  );
 
 /** Backwards-compatible alias for existing executeSkill call sites. */
 const collectSkillFiles = collectPiGeneratedFiles;
@@ -949,6 +1130,8 @@ module.exports = {
   buildPiFileLinks,
   filterPiResultFiles,
   MAX_PI_RESULT_FILES,
+  listPiFiles,
+  readPiTextFile,
   PI_HOST,
   PI_API_KEY,
 };

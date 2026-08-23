@@ -14,11 +14,12 @@ const {
 const { processFileCitations } = require('~/server/services/Files/Citations');
 const {
   processCodeOutput,
+  syncCodeOutputToPi,
   processCodeOutputWithPI,
 } = require('~/server/services/Files/Code/process');
 const { loadAuthValues } = require('~/server/services/Tools/credentials');
 const { saveBase64Image } = require('~/server/services/Files/process');
-const { isPIConfigured } = require('~/server/services/PIService');
+const { isPIConfigured, buildPiFileLinks } = require('~/server/services/PIService');
 
 class ModelEndHandler {
   /**
@@ -311,9 +312,45 @@ function writeAttachment(res, streamId, attachment) {
  * @param {ServerResponse} params.res
  * @param {Promise<MongoFile | { filename: string; filepath: string; expires: number;} | null>[]} params.artifactPromises
  * @param {string | null} [params.streamId] - The stream ID for resumable mode, or null for standard mode.
+ * @param {{ current: string | null }} [params.piAgentIdRef] - Mutable ref resolved with the
+ *   primary agent id once initialization completes; used to key the PI workspace
+ *   when syncing execute_code outputs back to PI.
  * @returns {ToolEndCallback} The tool end callback.
  */
-function createToolEndCallback({ req, res, artifactPromises, streamId = null }) {
+function createToolEndCallback({ req, res, artifactPromises, streamId = null, piAgentIdRef }) {
+  /**
+   * Upload a code-env output file to the PI workspace and stage the canonical
+   * download-links footer (req._piFileLinksText) so the controller appends it
+   * to the final response text — the same surface execute_skill uses.
+   */
+  const stagePiCodeOutputLink = async ({ id, name, session_id, apiKey, metadata }) => {
+    try {
+      const agentId = piAgentIdRef?.current || req._piAgentId || null;
+      const conversationId = metadata?.thread_id;
+      if (!agentId || !conversationId) {
+        return;
+      }
+      const piFile = await syncCodeOutputToPi({
+        req,
+        id,
+        name,
+        session_id,
+        apiKey,
+        agentId,
+        conversationId,
+      });
+      if (!piFile) {
+        return;
+      }
+      const links = buildPiFileLinks([piFile]);
+      if (links) {
+        req._piFileLinksText = (req._piFileLinksText || '') + links;
+      }
+    } catch (error) {
+      logger.error('Error syncing code output to PI:', error);
+    }
+  };
+
   /**
    * @type {ToolEndCallback}
    */
@@ -462,17 +499,27 @@ function createToolEndCallback({ req, res, artifactPromises, streamId = null }) 
             userId: req.user.id,
             authFields: [EnvVar.CODE_API_KEY],
           });
+          const codeApiKey = result[EnvVar.CODE_API_KEY];
           const processFn = processCodeOutput;
           const fileMetadata = await processFn({
             req,
             id,
             name,
-            apiKey: result[EnvVar.CODE_API_KEY],
+            apiKey: codeApiKey,
             messageId: metadata.run_id,
             toolCallId: output.tool_call_id,
             conversationId: metadata.thread_id,
             session_id: output.artifact.session_id,
           });
+          if (isPIConfigured(req) && codeApiKey) {
+            await stagePiCodeOutputLink({
+              id,
+              name,
+              session_id: output.artifact.session_id,
+              apiKey: codeApiKey,
+              metadata,
+            });
+          }
           if (!streamId && !res.headersSent) {
             return fileMetadata;
           }

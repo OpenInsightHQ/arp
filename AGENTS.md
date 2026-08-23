@@ -90,7 +90,7 @@ Multi-line imports count total character length across all lines. Consolidate va
 ### Localization
 
 - All user-facing text must use `useLocalize()`.
-- Only update English keys in `client/src/locales/en/translation.json` (other languages are automated externally).
+- Update BOTH `client/src/locales/en/translation.json` AND `client/src/locales/zh-Hans/translation.json` (other languages are automated externally).
 - Semantic key prefixes: `com_ui_`, `com_assistants_`, etc.
 
 ### Components

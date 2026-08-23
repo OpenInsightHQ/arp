@@ -1,18 +1,8 @@
 import debounce from 'lodash/debounce';
-import { useEffect, useRef, useCallback, useMemo } from 'react';
-import { v4 } from 'uuid';
-import { useRecoilValue, useRecoilState, useSetRecoilState } from 'recoil';
+import { useEffect, useRef, useCallback } from 'react';
+import { useRecoilValue, useRecoilState } from 'recoil';
 import type { TEndpointOption } from 'librechat-data-provider';
 import type { KeyboardEvent } from 'react';
-import {
-  Constants,
-  QueryKeys,
-  inferMimeType,
-  isEphemeralAgentId,
-  encodeEphemeralAgentId,
-  uploadFileSimple,
-  type TEndpointsConfig,
-} from 'librechat-data-provider';
 import {
   forceResize,
   insertTextAtCursor,
@@ -23,10 +13,9 @@ import {
 import { useAssistantsMapContext } from '~/Providers/AssistantsMapContext';
 import { useAgentsMapContext } from '~/Providers/AgentsMapContext';
 import useGetSender from '~/hooks/Conversations/useGetSender';
-import useFileHandling from '~/hooks/Files/useFileHandling';
+import usePiFileUpload from '~/hooks/Files/usePiFileUpload';
 import { useInteractionHealthCheck } from '~/data-provider';
 import { useChatContext } from '~/Providers/ChatContext';
-import { useQueryClient } from '@tanstack/react-query';
 import { globalAudioId } from '~/common';
 import { useLocalize } from '~/hooks';
 import store from '~/store';
@@ -48,49 +37,15 @@ export default function useTextarea({
   const getSender = useGetSender();
   const isComposing = useRef(false);
   const agentsMap = useAgentsMapContext();
-  const { handleFiles } = useFileHandling();
   const assistantMap = useAssistantsMapContext();
   const checkHealth = useInteractionHealthCheck();
   const enterToSend = useRecoilValue(store.enterToSend);
-  const queryClient = useQueryClient();
-  const setConversationState = useSetRecoilState(store.conversationByIndex(0));
 
-  const {
-    index,
-    conversation,
-    isSubmitting,
-    filesLoading,
-    latestMessage,
-    setFilesLoading,
-    setFiles,
-    files: existingFiles,
-  } = useChatContext();
+  const { index, conversation, isSubmitting, filesLoading, latestMessage } = useChatContext();
   const [activePrompt, setActivePrompt] = useRecoilState(store.activePromptByIndex(index));
 
   const { endpoint = '' } = conversation || {};
-
-  const piFilesAgentId = useMemo(() => {
-    if (!conversation) {
-      return 'default';
-    }
-    const agentId = conversation.agent_id;
-    if (agentId && !isEphemeralAgentId(agentId)) {
-      return agentId;
-    }
-    if (conversation?.model) {
-      const endpointsConfig = queryClient.getQueryData<TEndpointsConfig>([QueryKeys.endpoints]);
-      const modelLabel = conversation.modelLabel ?? '';
-      const modelDisplayLabel =
-        endpointsConfig?.[conversation.endpoint ?? '']?.modelDisplayLabel ?? '';
-      const sender = modelLabel || modelDisplayLabel || undefined;
-      return encodeEphemeralAgentId({
-        endpoint: conversation.endpoint ?? '',
-        model: conversation.model,
-        sender,
-      });
-    }
-    return 'default';
-  }, [conversation, queryClient]);
+  const { uploadFilesToPi } = usePiFileUpload();
   const { entity, isAgent, isAssistant } = getEntity({
     endpoint,
     agentsMap,
@@ -262,93 +217,11 @@ export default function useTextarea({
       }
 
       if (clipboardData.files.length > 0) {
-        setFilesLoading(true);
-        const timestampedFiles: File[] = [];
-        for (const file of clipboardData.files) {
-          const newFile = new File([file], `clipboard_${+new Date()}_${file.name}`, {
-            type: file.type,
-          });
-          timestampedFiles.push(newFile);
-        }
-
-        if ((endpoint as string) === 'pi') {
-          let sid = conversation?.conversationId;
-          if (!sid || sid === Constants.NEW_CONVO || sid === Constants.PENDING_CONVO) {
-            const newId = v4();
-            if (conversation) {
-              setConversationState({ ...conversation, conversationId: newId });
-            }
-            sid = newId;
-          }
-          const piFiles = Array.from(clipboardData.files);
-          const nameToFileId = new Map<string, string>();
-          for (const ef of existingFiles?.values() ?? []) {
-            if (ef.endpoint !== 'pi' || !ef.filename) {
-              continue;
-            }
-            nameToFileId.set(ef.filename, ef.file_id);
-          }
-          for (const originalFile of piFiles) {
-            const file_id = nameToFileId.get(originalFile.name) ?? v4();
-            nameToFileId.set(originalFile.name, file_id);
-            const preview = URL.createObjectURL(originalFile);
-            const baseFile = {
-              file_id,
-              file: originalFile,
-              type: inferMimeType(originalFile.name, originalFile.type),
-              preview,
-              progress: 0.5,
-              size: originalFile.size,
-              filename: originalFile.name,
-              endpoint: 'pi' as const,
-              pi_session_id: sid,
-              pi_agent_id: piFilesAgentId,
-            };
-            setFiles((prev: Map<string, any>) => {
-              const next = new Map(prev);
-              next.set(file_id, baseFile);
-              return next;
-            });
-            try {
-              const res = await uploadFileSimple(piFilesAgentId, sid, originalFile);
-              const basePath = (res.path ?? '').replace(/\/+$/, '');
-              const fullPath = basePath ? `${basePath}/${originalFile.name}` : originalFile.name;
-              setFiles((prev: Map<string, any>) => {
-                const next = new Map(prev);
-                next.set(file_id, {
-                  ...baseFile,
-                  progress: 1,
-                  filepath: fullPath,
-                });
-                return next;
-              });
-            } catch (err) {
-              console.error('PI paste upload failed:', err);
-              setFiles((prev: Map<string, any>) => {
-                const next = new Map(prev);
-                next.delete(file_id);
-                return next;
-              });
-            }
-          }
-          setFilesLoading(false);
-        } else {
-          // Non-PI: original behavior
-          handleFiles(timestampedFiles);
-        }
+        e.preventDefault();
+        await uploadFilesToPi(clipboardData.files);
       }
     },
-    [
-      handleFiles,
-      setFilesLoading,
-      setFiles,
-      textAreaRef,
-      endpoint,
-      conversation,
-      piFilesAgentId,
-      setConversationState,
-      existingFiles,
-    ],
+    [uploadFilesToPi, textAreaRef],
   );
 
   return {

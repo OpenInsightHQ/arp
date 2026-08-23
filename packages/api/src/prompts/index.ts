@@ -1,4 +1,5 @@
 export * from './artifacts';
+export * from './attachments';
 export * from './echarts';
 export * from './format';
 export * from './migration';

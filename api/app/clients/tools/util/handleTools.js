@@ -52,6 +52,7 @@ const {
   downloadPIFile,
   buildPiFileLinks,
   filterPiResultFiles,
+  readPiTextFile,
 } = require('~/server/services/PIService');
 const { scheduleBackgroundSkillFileCollection } = require('~/server/services/BackgroundSkillFiles');
 const { DynamicStructuredTool } = require('@langchain/core/tools');
@@ -438,9 +439,7 @@ Rules:
     schema: z.object({
       key: z
         .string()
-        .describe(
-          'The prompt key exactly as listed in <available_prompts>. Do not invent keys.',
-        ),
+        .describe('The prompt key exactly as listed in <available_prompts>. Do not invent keys.'),
     }),
     func: async ({ key }) => {
       const result = await handlePIToolCall(
@@ -463,7 +462,42 @@ Rules:
     },
   });
 
-  tools.push(piExecuteSkillTool, piReadPromptTool);
+  const piReadTextFileTool = new DynamicStructuredTool({
+    name: 'read_text_file',
+    description: `Read the content of a text file from the user's file workspace.
+
+Use this tool when you need the content of one of the files listed in the <attachments> section of the system prompt (also referenced by the user as [附件:filename] or [Attachment:filename]).
+
+Rules:
+- path MUST be one of the <path> values listed in <attachments>, passed EXACTLY as listed (workspace-relative, e.g. report.pdf, data/values.csv). Do not invent paths.
+- Do NOT pass /mnt/data/... paths: that prefix only exists inside the execute_code sandbox, not in this workspace.
+- Only text files can be read. Binary/non-text files (images, PDF, office documents, archives, ...) must be processed with the execute_code tool or a configured skill instead.
+- Returns the file content; use it to fulfill the user's request.`,
+    schema: z.object({
+      path: z
+        .string()
+        .describe(
+          'The file path exactly as listed in <attachments> of the system prompt. Do not invent paths.',
+        ),
+    }),
+    func: async ({ path: filePath }) => {
+      const result = await readPiTextFile(
+        {
+          agentId: effectiveAgentId,
+          sessionId,
+          path: filePath,
+        },
+        userId,
+      );
+
+      if (!result.success) {
+        return `Error: ${result.error}`;
+      }
+      return result.data?.content || '';
+    },
+  });
+
+  tools.push(piExecuteSkillTool, piReadPromptTool, piReadTextFileTool);
   return tools;
 };
 

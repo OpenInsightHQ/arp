@@ -6,12 +6,12 @@ import { useSetRecoilState, useResetRecoilState, useRecoilValue } from 'recoil';
 import {
   Constants,
   QueryKeys,
+  filesDownload,
   ContentTypes,
   EModelEndpoint,
   getEndpointField,
   isAgentsEndpoint,
   parseCompactConvo,
-  replaceSpecialVars,
   isAssistantsEndpoint,
   getDefaultParamsEndpoint,
 } from 'librechat-data-provider';
@@ -228,13 +228,25 @@ export default function useChatFunctions({
       setFilesToDelete({});
     } else if (setFiles && files && files.size > 0) {
       console.log('[ChatView] Setting files for message');
-      currentMsg.files = Array.from(files.values()).map((file) => ({
-        file_id: file.file_id,
-        filepath: file.filepath,
-        type: file.type ?? '',
-        height: file.height,
-        width: file.width,
-      }));
+      currentMsg.files = Array.from(files.values()).map((file) => {
+        if (file.endpoint === 'pi' && file.pi_agent_id && file.pi_session_id && file.filepath) {
+          return {
+            file_id: file.file_id,
+            filename: file.filename,
+            type: file.type ?? '',
+            height: file.height,
+            width: file.width,
+            filepath: filesDownload(file.pi_agent_id, file.pi_session_id, file.filepath),
+          };
+        }
+        return {
+          file_id: file.file_id,
+          filepath: file.filepath,
+          type: file.type ?? '',
+          height: file.height,
+          width: file.width,
+        };
+      });
       setFiles(new Map());
       setFilesToDelete({});
     }

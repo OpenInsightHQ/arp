@@ -25,6 +25,7 @@ const { isStreamLogEnabled, createStreamLogCollector } = require('~/server/servi
 const { getModelsConfig } = require('~/server/controllers/ModelController');
 const { AgentClient } = require('~/server/controllers/agents/client');
 const { getConvoFiles } = require('~/models/Conversation');
+const { isPIConfigured, listPiFiles } = require('~/server/services/PIService');
 const { processAddedConvo } = require('./addedConvo');
 const { getAgent } = require('~/models/Agent');
 const { logViolation } = require('~/cache');
@@ -113,7 +114,20 @@ const initializeClient = async ({ req, res, signal, endpointOption }) => {
   const artifactPromises = [];
   const { contentParts, aggregateContent } = createContentAggregator();
   const timestampTracker = createTimestampTracker();
-  const toolEndCallback = createToolEndCallback({ req, res, artifactPromises, streamId });
+  /**
+   * PI workspace agent id, resolved once the primary agent finishes
+   * initialization; used by the tool-end callback to sync execute_code
+   * outputs back into the PI workspace keyed by the primary agent.
+   * @type {{ current: string | null }}
+   */
+  const piAgentIdRef = { current: null };
+  const toolEndCallback = createToolEndCallback({
+    req,
+    res,
+    artifactPromises,
+    streamId,
+    piAgentIdRef,
+  });
 
   /**
    * Agent context store - populated after initialization, accessed by callback via closure.
@@ -209,6 +223,17 @@ const initializeClient = async ({ req, res, signal, endpointOption }) => {
   /** Event-driven mode: only load tool definitions, not full instances */
   const loadTools = createToolLoader(signal, streamId, conversationId, true);
 
+  /**
+   * PI workspace attachments (agent/model endpoints): reuse PIService's
+   * canonical listPiFiles to fetch the conversation's PI workspace inventory
+   * once; initializeAgent turns it into the `<attachments>` prompt section
+   * and mounts read_text_file. The PI endpoint manages its own attachments.
+   */
+  let piAttachmentFiles;
+  if (String(endpointOption.endpoint) !== 'pi' && isPIConfigured(req) && conversationId) {
+    piAttachmentFiles = await listPiFiles(primaryAgent.id, conversationId, req.user?.id);
+  }
+
   const primaryConfig = await initializeAgent(
     {
       req,
@@ -221,6 +246,7 @@ const initializeClient = async ({ req, res, signal, endpointOption }) => {
       endpointOption,
       allowedProviders,
       isInitialAgent: true,
+      piAttachmentFiles,
     },
     {
       getConvoFiles,
@@ -238,6 +264,9 @@ const initializeClient = async ({ req, res, signal, endpointOption }) => {
   logger.debug(
     `[initializeClient] Tool definitions for primary agent: ${primaryConfig.toolDefinitions?.length ?? 0}`,
   );
+
+  /** Resolve the PI workspace agent id for execute_code output syncing */
+  piAgentIdRef.current = primaryConfig.id ?? null;
 
   /** Store primary agent's tool context for ON_TOOL_EXECUTE callback */
   logger.debug(`[initializeClient] Storing tool context for agentId: ${primaryConfig.id}`);
