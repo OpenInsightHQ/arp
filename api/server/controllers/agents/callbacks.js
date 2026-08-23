@@ -322,13 +322,15 @@ function createToolEndCallback({ req, res, artifactPromises, streamId = null, pi
    * Upload a code-env output file to the PI workspace and stage the canonical
    * download-links footer (req._piFileLinksText) so the controller appends it
    * to the final response text — the same surface execute_skill uses.
+   * Returns the canonical PI attachment record (file_id/filename/filepath with
+   * the /arp/api/pi/files/download URL) or null.
    */
   const stagePiCodeOutputLink = async ({ id, name, session_id, apiKey, metadata }) => {
     try {
       const agentId = piAgentIdRef?.current || req._piAgentId || null;
       const conversationId = metadata?.thread_id;
       if (!agentId || !conversationId) {
-        return;
+        return null;
       }
       const piFile = await syncCodeOutputToPi({
         req,
@@ -340,14 +342,25 @@ function createToolEndCallback({ req, res, artifactPromises, streamId = null, pi
         conversationId,
       });
       if (!piFile) {
-        return;
+        return null;
       }
       const links = buildPiFileLinks([piFile]);
       if (links) {
         req._piFileLinksText = (req._piFileLinksText || '') + links;
       }
+      return {
+        file_id: piFile.name,
+        temp_file_id: piFile.name,
+        filename: piFile.name,
+        filepath: piFile.url,
+        type: 'application/octet-stream',
+        conversationId,
+        messageId: metadata.run_id,
+        toolCallId: metadata.tool_call_id,
+      };
     } catch (error) {
       logger.error('Error syncing code output to PI:', error);
+      return null;
     }
   };
 
@@ -500,6 +513,33 @@ function createToolEndCallback({ req, res, artifactPromises, streamId = null, pi
             authFields: [EnvVar.CODE_API_KEY],
           });
           const codeApiKey = result[EnvVar.CODE_API_KEY];
+
+          /**
+           * PI flow: download from the code env, upload into the PI workspace,
+           * and emit the canonical /arp/api/pi/files/download attachment +
+           * links footer. No LibreChat file storage (uploads dir / DB file
+           * record) is involved — PI is the single storage backend.
+           */
+          if (isPIConfigured(req) && codeApiKey) {
+            const piAttachment = await stagePiCodeOutputLink({
+              id,
+              name,
+              session_id: output.artifact.session_id,
+              apiKey: codeApiKey,
+              metadata,
+            });
+            if (piAttachment) {
+              if (!streamId && !res.headersSent) {
+                return piAttachment;
+              }
+              writeAttachment(res, streamId, piAttachment);
+              return piAttachment;
+            }
+            logger.warn(
+              `PI sync failed for code output "${name}"; falling back to LibreChat file processing`,
+            );
+          }
+
           const processFn = processCodeOutput;
           const fileMetadata = await processFn({
             req,
@@ -511,15 +551,6 @@ function createToolEndCallback({ req, res, artifactPromises, streamId = null, pi
             conversationId: metadata.thread_id,
             session_id: output.artifact.session_id,
           });
-          if (isPIConfigured(req) && codeApiKey) {
-            await stagePiCodeOutputLink({
-              id,
-              name,
-              session_id: output.artifact.session_id,
-              apiKey: codeApiKey,
-              metadata,
-            });
-          }
           if (!streamId && !res.headersSent) {
             return fileMetadata;
           }
@@ -718,12 +749,57 @@ function createResponsesToolEndCallback({ req, res, tracker, artifactPromises })
             userId: req.user.id,
             authFields: [EnvVar.CODE_API_KEY],
           });
+          const codeApiKey = result[EnvVar.CODE_API_KEY];
+
+          /**
+           * PI flow: upload into the PI workspace and emit the canonical
+           * /arp/api/pi/files/download URL. No LibreChat file storage —
+           * PI is the single storage backend.
+           */
+          if (isPIConfigured(req) && codeApiKey) {
+            const agentId = req._piAgentId || null;
+            const conversationId = metadata.thread_id;
+            const piFile =
+              agentId && conversationId
+                ? await syncCodeOutputToPi({
+                    req,
+                    id,
+                    name,
+                    session_id: output.artifact.session_id,
+                    apiKey: codeApiKey,
+                    agentId,
+                    conversationId,
+                  }).catch(() => null)
+                : null;
+            if (piFile) {
+              const links = buildPiFileLinks([piFile]);
+              if (links) {
+                req._piFileLinksText = (req._piFileLinksText || '') + links;
+              }
+              const piAttachment = {
+                file_id: piFile.name,
+                filename: piFile.name,
+                type: 'application/octet-stream',
+                filepath: piFile.url,
+                url: piFile.url,
+                tool_call_id: output.tool_call_id,
+              };
+              if (res.headersSent && !res.writableEnded) {
+                writeResponsesAttachment(res, tracker, piAttachment, metadata);
+              }
+              return piAttachment;
+            }
+            logger.warn(
+              `PI sync failed for code output "${name}"; falling back to LibreChat file processing`,
+            );
+          }
+
           const processFn = processCodeOutput;
           const fileMetadata = await processFn({
             req,
             id,
             name,
-            apiKey: result[EnvVar.CODE_API_KEY],
+            apiKey: codeApiKey,
             messageId: metadata.run_id,
             toolCallId: output.tool_call_id,
             conversationId: metadata.thread_id,
