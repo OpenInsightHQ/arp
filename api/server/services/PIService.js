@@ -841,14 +841,41 @@ const collectSkillFiles = collectPiGeneratedFiles;
 const MAX_PI_RESULT_FILES = 10;
 
 /**
+ * Whether a filename/path is mentioned in `text` as a whole token (word
+ * boundary), not as a substring — `sheet1.xml` must not match text that only
+ * contains `sheet1.xml.bak` or a longer path embedding it.
+ */
+const isMentionedInText = (name, text) => {
+  if (!name || !text) {
+    return false;
+  }
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pattern = new RegExp(`(^|[^\\w./-])${escaped}($|[^\\w./-])`);
+  return pattern.test(text);
+};
+
+/**
+ * Intermediate-artifact directories created by skills during a run (unpack
+ * workdirs, temp stages). Files under them are build intermediates, not
+ * deliverables — excluded from result-file footers even when the skill's
+ * prose mentions them (skills routinely narrate "edited sharedStrings.xml
+ * in ./xlsx_work/" while the actual deliverable is the repacked original).
+ */
+const INTERMEDIATE_DIR_PATTERN = /(^|\/)([^/]*_work|work|temp|tmp|\.tmp)(\/|$)/i;
+
+const isIntermediateArtifact = (filePath) => INTERMEDIATE_DIR_PATTERN.test(String(filePath || ''));
+
+/**
  * Shared post-processing for pi file lists:
  * - optional text filter: keep only files whose basename or path is mentioned
- *   in `text` (pass null/undefined to keep all)
+ *   in `text` (whole-token match; pass null/undefined to keep all). The text
+ *   must be the assistant's PROSE output — never tool_call output, which
+ *   enumerates every workspace file and would defeat the filter.
  * - dedupe by basename
  * - truncate to MAX_PI_RESULT_FILES
  *
- * Used by one-pi buildFileLinks and GallerySkillTaskRun.files so both
- * surfaces apply identical filtering rules.
+ * Used by one-pi buildFileLinks, execute_skill footers and
+ * GallerySkillTaskRun.files so all surfaces apply identical filtering rules.
  */
 const filterPiResultFiles = (files, text = null) => {
   if (!files || files.length === 0) {
@@ -858,8 +885,11 @@ const filterPiResultFiles = (files, text = null) => {
   const pool =
     text != null
       ? files.filter((f) => {
+          if (isIntermediateArtifact(f.path || f.name)) {
+            return false;
+          }
           const basename = (f.path || f.name || '').split('/').pop();
-          return text.includes(basename) || (f.path && text.includes(f.path));
+          return isMentionedInText(basename, text) || isMentionedInText(f.path, text);
         })
       : files;
 

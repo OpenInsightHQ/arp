@@ -173,6 +173,11 @@ const createPITools = (options = {}) => {
    * the one-pi chat surface) on the request so the controller appends it to
    * the final response message text before saving — file links must not
    * depend on the LLM relaying them from the collapsed tool output.
+   *
+   * Filtering source: ONLY the skill's prose output (`output`), never the
+   * "Generated Files:" block that formatSkillResult appends to the tool
+   * output (that block lists every workspace file, which would defeat the
+   * mention filter and flood the footer with intermediates).
    */
   const stagePiFileLinks = (files, text) => {
     if (!req || !Array.isArray(files) || files.length === 0) {
