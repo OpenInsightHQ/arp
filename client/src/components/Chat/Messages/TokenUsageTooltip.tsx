@@ -70,9 +70,9 @@ export default function TokenUsageTooltip({
   return (
     <HoverCard openDelay={200} closeDelay={100}>
       <HoverCardTrigger asChild>
-        <span className="cursor-help font-mono text-xs text-text-secondary underline decoration-dotted underline-offset-4">
-          In: {formatTokens(input)} / Out: {formatTokens(output)} / Cache:{' '}
-          {formatTokens(cacheRead)}
+        <span className="flex items-center gap-2">
+          <span title="输入 Token 数">In: {formatTokens(input)}</span>
+          <span title="输出 Token 数">Out: {formatTokens(output)}</span>
         </span>
       </HoverCardTrigger>
       <HoverCardPortal>
