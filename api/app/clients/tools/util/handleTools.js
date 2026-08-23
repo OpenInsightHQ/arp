@@ -165,7 +165,16 @@ const createPITools = (options = {}) => {
   }
 
   const { streamId, res, req, agentId, conversationId, userId } = options;
-  const effectiveAgentId = agentId || 'default';
+  /**
+   * PI workspace key resolution (must match every other PI surface —
+   * <attachments> inventory, execute_code syncing, PI download URLs):
+   * 1. req._piAgentId — primary agent id stashed during initialization
+   *    (always set for agent/model endpoints, even with an empty workspace)
+   * 2. options.agentId — fallback for execution paths that never ran the
+   *    initialization stash (e.g. missing agent context)
+   * 3. 'default'
+   */
+  const effectiveAgentId = req?._piAgentId || agentId || 'default';
   const sessionId = conversationId || undefined;
 
   /**

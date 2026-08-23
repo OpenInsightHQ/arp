@@ -316,14 +316,20 @@ export async function initializeAgent(
    */
   if (isInitialAgent === true && String(endpointOption?.endpoint) !== 'pi') {
     const attachments = piAttachmentFiles ?? [];
+    /**
+     * Always stash the primary agent id as the PI workspace key for this
+     * request (createPITools/execute_skill, execute_code syncing, download
+     * URLs all read it) — even when the workspace is currently empty, so
+     * every PI interaction within the request uses one consistent key.
+     */
+    const piRequest = req as ServerRequest & {
+      _piAttachmentFiles?: PiSessionFile[];
+      _piAgentId?: string;
+    };
+    piRequest._piAgentId = agent.id;
     const attachmentsPrompt = buildPiAttachmentsPrompt(attachments);
     if (attachmentsPrompt) {
-      const piRequest = req as ServerRequest & {
-        _piAttachmentFiles?: PiSessionFile[];
-        _piAgentId?: string;
-      };
       piRequest._piAttachmentFiles = attachments;
-      piRequest._piAgentId = agent.id;
       agent.additional_instructions = appendUniquePrompt(
         agent.additional_instructions,
         attachmentsPrompt,
