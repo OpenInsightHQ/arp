@@ -2,7 +2,12 @@ import { memo, useRef, useMemo, useEffect, useState, useCallback } from 'react';
 import { useWatch } from 'react-hook-form';
 import { TextareaAutosize } from '@librechat/client';
 import { useRecoilState, useRecoilValue, useSetRecoilState } from 'recoil';
-import { Constants, isAssistantsEndpoint, isAgentsEndpoint } from 'librechat-data-provider';
+import {
+  Constants,
+  EModelEndpoint,
+  isAssistantsEndpoint,
+  isAgentsEndpoint,
+} from 'librechat-data-provider';
 import type { VocabularyHit } from 'librechat-data-provider';
 import {
   useChatContext,
@@ -157,10 +162,12 @@ const ChatForm = memo(({ index = 0 }: { index?: number }) => {
   } = useAddedChatContext();
   const assistantMap = useAssistantsMapContext();
 
-  const endpoint = useMemo(
-    () => conversation?.endpointType ?? conversation?.endpoint,
-    [conversation?.endpointType, conversation?.endpoint],
-  );
+  const endpoint = useMemo(() => {
+    if (conversation?.endpoint === EModelEndpoint.agents) {
+      return EModelEndpoint.agents;
+    }
+    return conversation?.endpointType ?? conversation?.endpoint;
+  }, [conversation?.endpointType, conversation?.endpoint]);
   const isPI = conversation?.endpoint === 'pi';
   const conversationId = useMemo(
     () => conversation?.conversationId ?? Constants.NEW_CONVO,
