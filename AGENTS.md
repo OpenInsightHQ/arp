@@ -89,8 +89,10 @@ Multi-line imports count total character length across all lines. Consolidate va
 
 ### Localization
 
-- All user-facing text must use `useLocalize()`.
-- Only update English keys in `client/src/locales/en/translation.json` (other languages are automated externally).
+- Every page or component change must explicitly consider localization before implementation and review.
+- All user-facing text, including labels, tooltips, titles, placeholders, validation messages, and accessibility text, must use `useLocalize()`; never hardcode display text in components.
+- Add the English source key to `client/src/locales/en/translation.json`. When a feature ships with product-maintained translations, update those locale files in the same change; other languages remain automated externally.
+- Verify new or changed UI in both English and Simplified Chinese before deployment.
 - Semantic key prefixes: `com_ui_`, `com_assistants_`, etc.
 
 ### Components

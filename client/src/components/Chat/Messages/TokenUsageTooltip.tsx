@@ -5,6 +5,7 @@ import {
   HoverCardPortal,
   HoverCardTrigger,
 } from '@librechat/client';
+import useLocalize from '~/hooks/useLocalize';
 
 const formatTokens = (value: number) => Math.max(0, value).toLocaleString();
 
@@ -19,6 +20,7 @@ export default function TokenUsageTooltip({
   cacheReadTokens,
   cacheWriteTokens,
 }: TokenUsageTooltipProps) {
+  const localize = useLocalize();
   const input = Math.max(0, inputTokenCount ?? 0);
   const output = Math.max(0, tokenCount ?? 0);
   const total = input + output;
@@ -33,35 +35,35 @@ export default function TokenUsageTooltip({
   const detail = (
     <div className="w-full min-w-0 space-y-3 text-sm">
       <div className={`${rowClassName} border-b border-border-medium pb-2 font-medium`}>
-        <span className="min-w-0">Token 消耗明细</span>
+        <span className="min-w-0">{localize('com_ui_token_usage_details')}</span>
         <span className={valueClassName}>{formatTokens(total)}</span>
       </div>
       <div className="space-y-1.5">
         <div className={rowClassName}>
-          <span className="min-w-0">输入</span>
+          <span className="min-w-0">{localize('com_ui_input')}</span>
           <span className={valueClassName}>{formatTokens(input)}</span>
         </div>
         <div className="space-y-1 pl-3 text-text-secondary">
           <div className={rowClassName}>
-            <span className="min-w-0">缓存命中</span>
+            <span className="min-w-0">{localize('com_ui_token_cache_hit')}</span>
             <span className={valueClassName}>{formatTokens(cacheRead)}</span>
           </div>
           <div className={rowClassName}>
-            <span className="min-w-0">缓存未命中</span>
+            <span className="min-w-0">{localize('com_ui_token_cache_miss')}</span>
             <span className={valueClassName}>{formatTokens(cacheMiss)}</span>
           </div>
           <div className={rowClassName}>
-            <span className="min-w-0">缓存写入</span>
+            <span className="min-w-0">{localize('com_ui_token_cache_write')}</span>
             <span className={valueClassName}>{formatTokens(cacheWrite)}</span>
           </div>
         </div>
         <div className={rowClassName}>
-          <span className="min-w-0">输出</span>
+          <span className="min-w-0">{localize('com_ui_token_output')}</span>
           <span className={valueClassName}>{formatTokens(output)}</span>
         </div>
       </div>
       <div className={`${rowClassName} border-t border-border-medium pt-2`}>
-        <span className="min-w-0">缓存命中率</span>
+        <span className="min-w-0">{localize('com_ui_token_cache_hit_rate')}</span>
         <span className={valueClassName}>{cacheHitRate.toFixed(1)}%</span>
       </div>
     </div>
@@ -71,8 +73,8 @@ export default function TokenUsageTooltip({
     <HoverCard openDelay={200} closeDelay={100}>
       <HoverCardTrigger asChild>
         <span className="flex items-center gap-2">
-          <span title="输入 Token 数">In: {formatTokens(input)}</span>
-          <span title="输出 Token 数">Out: {formatTokens(output)}</span>
+          <span title={localize('com_ui_token_input_count')}>In: {formatTokens(input)}</span>
+          <span title={localize('com_ui_token_output_count')}>Out: {formatTokens(output)}</span>
         </span>
       </HoverCardTrigger>
       <HoverCardPortal>
