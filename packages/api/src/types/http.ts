@@ -8,6 +8,9 @@ import type { Request } from 'express';
  */
 export type RequestBody = {
   messageId?: string;
+  responseMessageId?: string;
+  overrideUserMessageId?: string;
+  piContextHandoff?: string | boolean;
   fileTokenLimit?: number;
   conversationId?: string;
   parentMessageId?: string;

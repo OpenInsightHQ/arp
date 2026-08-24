@@ -184,6 +184,8 @@ export async function initializeCustom({
       bodyMessageId,
       derivedResponseMessageId,
       req.body?.parentMessageId as string | undefined,
+      endpointConfig,
+      req.body?.piContextHandoff,
       req.user?.id as string | undefined,
     ),
   };

@@ -1,3 +1,7 @@
+export type PiHeaderEndpoint = {
+  piContextHandoff?: string | boolean | null;
+};
+
 function buildPiForwardHeaders(
   existingHeaders: Record<string, string> | undefined,
   conversationId: string | undefined,
@@ -5,6 +9,8 @@ function buildPiForwardHeaders(
   userMessageId?: string,
   responseMessageId?: string,
   parentMessageId?: string,
+  endpoint?: PiHeaderEndpoint,
+  contextHandoff?: string | boolean | null,
   userId?: string,
 ) {
   return {
@@ -17,6 +23,9 @@ function buildPiForwardHeaders(
     // persistence to the correct parent instead of inferring "last message"
     // (which can race/fork the tree, e.g. after an aborted turn).
     ...(parentMessageId ? { 'X-Parent-Message-Id': parentMessageId } : {}),
+    ...(contextHandoff != null || endpoint?.piContextHandoff != null
+      ? { 'X-PI-Context-Handoff': String(contextHandoff ?? endpoint?.piContextHandoff) }
+      : {}),
     // The /api/pi/chat/completions route has no JWT (server-to-server call
     // from the agents graph); without this header it falls back to the
     // 'system' user, whose pi /files listing is empty (per-user workspace
