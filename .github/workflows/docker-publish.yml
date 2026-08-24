@@ -57,3 +57,26 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  release-source:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Pack source tarball (arp-<version>.tar.gz)
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          git archive --format=tar.gz \
+            --prefix="arp-${VERSION}/" \
+            --output="arp-${VERSION}.tar.gz" \
+            HEAD
+
+      - name: Create release and upload tarball
+        uses: softprops/action-gh-release@v2
+        with:
+          files: arp-*.tar.gz
+          generate_release_notes: true
