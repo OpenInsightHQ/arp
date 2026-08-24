@@ -235,7 +235,7 @@ function ChatView({ index = 0 }: { index?: number }) {
                 >
                   {content}
                   {!isLandingPage && conversationId && conversationId !== Constants.NEW_CONVO && (
-                    <ConversationTaskList conversationId={conversationId} />
+                    <ConversationTaskList conversationId={conversationId} index={index} />
                   )}
                   <div
                     className={cn(

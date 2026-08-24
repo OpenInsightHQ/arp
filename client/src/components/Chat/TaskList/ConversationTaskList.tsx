@@ -1,5 +1,6 @@
 /* eslint-disable i18next/no-literal-string */
 import React, { useState, useEffect, useCallback } from 'react';
+import { useRecoilValue } from 'recoil';
 import {
   Clock,
   CheckCircle2,
@@ -10,6 +11,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { cn } from '~/utils';
+import store from '~/store';
 import {
   getTasksByConversation,
   clearCompletedTasks,
@@ -20,6 +22,7 @@ import TaskForm from './TaskForm';
 
 interface ConversationTaskListProps {
   conversationId: string;
+  index?: number;
 }
 
 const statusConfig: Record<string, { icon: React.ReactNode; color: string }> = {
@@ -38,12 +41,16 @@ const statusConfig: Record<string, { icon: React.ReactNode; color: string }> = {
 const INTERACTIVE_STATUSES = ['pending', 'accepted'];
 const TERMINAL_STATUSES = ['completed', 'rejected', 'dismissed', 'failed', 'aborted'];
 
-export default function ConversationTaskList({ conversationId }: ConversationTaskListProps) {
+export default function ConversationTaskList({
+  conversationId,
+  index = 0,
+}: ConversationTaskListProps) {
   const [tasks, setTasks] = useState<TaskQueueItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState(true);
   const [showHistory, setShowHistory] = useState(false);
   const [clearing, setClearing] = useState(false);
+  const isSubmitting = useRecoilValue(store.isSubmittingFamily(index));
 
   const fetchTasks = useCallback(async () => {
     try {
@@ -123,10 +130,22 @@ export default function ConversationTaskList({ conversationId }: ConversationTas
       {expanded && (
         <div className="space-y-2 px-4 pb-3">
           {executionTasks.map((task) => (
-            <TaskCard key={task._id} task={task} onSubmitted={fetchTasks} running />
+            <TaskCard
+              key={task._id}
+              task={task}
+              onSubmitted={fetchTasks}
+              running
+              streaming={isSubmitting}
+            />
           ))}
           {queuedTasks.map((task) => (
-            <TaskCard key={task._id} task={task} onSubmitted={fetchTasks} queued />
+            <TaskCard
+              key={task._id}
+              task={task}
+              onSubmitted={fetchTasks}
+              queued
+              streaming={isSubmitting}
+            />
           ))}
           {interactiveTasks.map((task) => (
             <TaskCard key={task._id} task={task} onSubmitted={fetchTasks} interactive />
@@ -177,6 +196,7 @@ function TaskCard({
   running = false,
   queued = false,
   compact = false,
+  streaming = true,
 }: {
   task: TaskQueueItem;
   onSubmitted: () => void;
@@ -184,21 +204,25 @@ function TaskCard({
   running?: boolean;
   queued?: boolean;
   compact?: boolean;
+  streaming?: boolean;
 }) {
   const config = statusConfig[task.status] ?? statusConfig.pending;
-  const [dismissing, setDismissing] = useState(false);
+  const [updating, setUpdating] = useState(false);
 
-  const handleDismiss = async () => {
-    setDismissing(true);
+  const handleStatusUpdate = async (status: TaskQueueItem['status']) => {
+    setUpdating(true);
     try {
-      await updateTaskQueueItem(task._id, { status: 'rejected' });
+      await updateTaskQueueItem(task._id, { status });
       onSubmitted();
     } catch {
       /* leave as-is on failure */
     } finally {
-      setDismissing(false);
+      setUpdating(false);
     }
   };
+
+  // 流式输出结束后仍处于活动态的任务，允许手动完结/取消
+  const showManualActions = !streaming && !interactive;
 
   return (
     <div
@@ -223,7 +247,7 @@ function TaskCard({
               {task.description}
             </div>
           )}
-          {queued && (
+          {queued && streaming && (
             <div className="mt-0.5 text-[10px] text-purple-500">已响应，等待 AI 下一轮处理</div>
           )}
           {task.resultSummary && (task.status === 'completed' || task.status === 'failed') && (
@@ -236,14 +260,23 @@ function TaskCard({
             <div className="mt-1 text-[10px] text-text-tertiary">Subagent: {task.subagentName}</div>
           )}
         </div>
-        {queued && (
-          <button
-            className="ml-2 shrink-0 text-[11px] text-text-secondary hover:text-red-500"
-            disabled={dismissing}
-            onClick={handleDismiss}
-          >
-            {dismissing ? '...' : '取消'}
-          </button>
+        {showManualActions && (
+          <div className="ml-2 flex shrink-0 items-center gap-1.5">
+            <button
+              className="rounded border border-emerald-300/50 px-1.5 py-0.5 text-[11px] text-emerald-600 transition-colors hover:bg-emerald-50 disabled:opacity-50 dark:border-emerald-500/30 dark:text-emerald-400 dark:hover:bg-emerald-500/10"
+              disabled={updating}
+              onClick={() => handleStatusUpdate('completed')}
+            >
+              完成
+            </button>
+            <button
+              className="rounded border border-border-light px-1.5 py-0.5 text-[11px] text-text-secondary transition-colors hover:text-red-500 disabled:opacity-50"
+              disabled={updating}
+              onClick={() => handleStatusUpdate(queued ? 'rejected' : 'aborted')}
+            >
+              取消
+            </button>
+          </div>
         )}
       </div>
     </div>
