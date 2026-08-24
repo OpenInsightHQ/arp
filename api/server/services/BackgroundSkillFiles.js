@@ -18,8 +18,11 @@
  */
 const { logger } = require('@librechat/data-schemas');
 const { TaskQueue } = require('../../models/TaskQueue');
-const { Message } = require('~/db/models');
-const { collectPiGeneratedFiles, buildPiFileLinks } = require('./PIService');
+const {
+  collectPiGeneratedFiles,
+  buildPiFileLinks,
+  appendPiLinksToSavedMessage,
+} = require('./PIService');
 
 const POLL_INTERVAL_MS = 5_000;
 const MAX_WAIT_MS = 30 * 60_000;
@@ -114,22 +117,10 @@ const scheduleBackgroundSkillFileCollection = async ({
       `[BackgroundSkillFiles] Skill ${skillName} finished for ${sessionId}: appending file links to message ${responseMessageId}`,
     );
 
-    try {
-      await Message.findByIdAndUpdate(responseMessageId, [
-        {
-          $set: {
-            text: {
-              $concat: [
-                { $ifNull: ['$text', ''] },
-                links,
-              ],
-            },
-          },
-        },
-      ]);
-    } catch (err) {
-      logger.error('[BackgroundSkillFiles] Failed to append links to message:', err.message);
-    }
+    // Matched by the messageId string field (not _id — a uuid passed to
+    // findByIdAndUpdate is a silent CastError), appending to text and any
+    // content parts.
+    await appendPiLinksToSavedMessage(responseMessageId, links);
   } catch (error) {
     logger.error('[BackgroundSkillFiles] Watcher failed:', error.message);
   } finally {

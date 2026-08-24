@@ -13,6 +13,13 @@ const { disposeClient, clientRegistry, requestDataMap } = require('~/server/clea
 const { handleAbortError } = require('~/server/middleware');
 const { logViolation } = require('~/cache');
 const { saveMessage } = require('~/models');
+const {
+  collectPiGeneratedFiles,
+  buildPiFileLinks,
+  filterPiResultFiles,
+  isIntermediateArtifact,
+  appendPiLinksToSavedMessage,
+} = require('~/server/services/PIService');
 const { removeStreamLogCollector } = require('~/server/services/StreamLog');
 const { sanitizeReflectedString } = require('~/server/utils/sanitize');
 
@@ -24,37 +31,148 @@ const { sanitizeReflectedString } = require('~/server/utils/sanitize');
 function readStreamLog(client) {
   const collector = client?.streamLogCollector;
   if (!collector) {
-    logger.info('[StreamLog] readStreamLog: no collector on client');
     return undefined;
   }
-  const log = collector.getLog();
-  logger.info(`[StreamLog] readStreamLog: ${log.length} chars`);
-  return log;
+  return collector.getLog();
 }
 
 /**
- * Append the staged pi file-links footer (req._piFileLinksText, staged by
- * execute_skill and the execute_code pi sync) to the response message so the
- * download links render on the page. Agent messages may be dual-content
- * (content-parts array with empty `text`), so the footer is appended to BOTH
- * `text` and a trailing text content part — same visible surface as the
- * one-pi chat buildFileLinks markdown.
+ * Read a TEXT content part's value, accepting both storage shapes: plain
+ * string server-side ({ text: '...' }), { value } wrap client-side.
+ * @param {Partial<TMessageContentPart>} part
+ * @returns {string}
+ */
+function textPartValue(part) {
+  if (part?.type !== ContentTypes.TEXT) {
+    return '';
+  }
+  const text = part[ContentTypes.TEXT];
+  return typeof text === 'string' ? text : (text?.value ?? '');
+}
+
+/**
+ * Extract the mention-filter source text from the response message,
+ * strict → loose:
+ * 1. TEXT parts after the LAST tool_call part — the final summary segment of
+ *    interleaved agent messages (text between tool calls is narration that
+ *    routinely mentions input/intermediate files);
+ * 2. all TEXT parts (models that end on a tool_call part);
+ * 3. response.text (text-only messages).
+ * @param {Partial<TMessage>} response
+ * @returns {string}
+ */
+function extractSummaryText(response) {
+  let strict = '';
+  let all = '';
+  if (Array.isArray(response.content)) {
+    for (const part of response.content) {
+      if (part?.type === ContentTypes.TOOL_CALL) {
+        strict = '';
+        continue;
+      }
+      const value = textPartValue(part);
+      if (value) {
+        strict += value;
+        all += value;
+      }
+    }
+  }
+  return strict || all || response.text || '';
+}
+
+/** Root-level (no directory component) files, excluding skill intermediates. */
+const rootDeliverableFiles = (files) =>
+  files.filter((f) => {
+    const p = f.path || f.name || '';
+    return !p.includes('/') && !isIntermediateArtifact(p);
+  });
+
+/** Max wait for the post-summary pi file collection; degrades to no footer. */
+const PI_FOOTER_DEADLINE_MS = 20_000;
+
+/**
+ * Collect the files of the turn's execute_skill runs and filter them down to
+ * the deliverables the final summary actually mentions. Fallback when the
+ * mention filter matches nothing: root-level deliverables — never the full
+ * list, so workspace clutter can never flood the footer.
+ * @param {Array<{agentId: string; sessionId: string; userId: string; startedAt: string}>} skillRuns
+ * @param {string} summaryText
+ * @returns {Promise<string>} footer markdown ('' when nothing to show)
+ */
+async function buildSkillRunFooter(skillRuns, summaryText) {
+  try {
+    const collected = await Promise.race([
+      Promise.all(
+        skillRuns.map((run) =>
+          collectPiGeneratedFiles(run.agentId, run.sessionId, run.userId, run.startedAt),
+        ),
+      ),
+      new Promise((resolve) => setTimeout(() => resolve(null), PI_FOOTER_DEADLINE_MS)),
+    ]);
+    if (!collected) {
+      logger.warn('[AgentController] Pi file collection timed out; skipping footer');
+      return '';
+    }
+
+    const allFiles = collected.flat();
+
+    const mentioned = summaryText
+      ? filterPiResultFiles(allFiles, summaryText)
+      : filterPiResultFiles(rootDeliverableFiles(allFiles));
+    const deliverables =
+      mentioned.length > 0 ? mentioned : filterPiResultFiles(rootDeliverableFiles(allFiles));
+
+    return buildPiFileLinks(deliverables) || '';
+  } catch (error) {
+    logger.warn('[AgentController] Pi skill file collection failed:', error.message);
+    return '';
+  }
+}
+
+/**
+ * Append the pi file-links footer to the response message so the download
+ * links render on the page. Agent messages may be dual-content (content-parts
+ * array with empty `text`), so the footer is appended to BOTH `text` and a
+ * trailing text content part (matching the sibling parts' storage shape) —
+ * same visible surface as the one-pi chat buildFileLinks markdown.
+ *
+ * Two staging sources, resolved AFTER the LLM finished its reply:
+ * - req._piSkillRuns (execute_skill): deferred runs — re-run
+ *   collectPiGeneratedFiles per run, filter the files against the LLM's final
+ *   summary text (whole-token mention match), then build the footer from
+ *   buildPiFileDownloadUrl links. Link accuracy never depends on the LLM
+ *   relaying URLs from the collapsed tool output.
+ * - req._piFileLinksText (execute_code pi sync): exact tool artifacts, kept
+ *   as-is without mention filtering.
+ *
  * @param {ServerRequest} req
  * @param {Partial<TMessage>} response
+ * @returns {Promise<string | null>} the appended footer, or null
  */
-function appendPiFileLinks(req, response) {
-  const footer = req._piFileLinksText;
-  if (!footer) {
-    return;
-  }
+async function appendPiFileLinks(req, response) {
+  const stagedLinks = req._piFileLinksText;
+  const skillRuns = req._piSkillRuns;
   delete req._piFileLinksText;
+  delete req._piSkillRuns;
+
+  let footer = stagedLinks || '';
+  if (Array.isArray(skillRuns) && skillRuns.length > 0) {
+    footer += await buildSkillRunFooter(skillRuns, extractSummaryText(response));
+  }
+
+  if (!footer) {
+    return null;
+  }
   response.text = (response.text || '') + footer;
   if (Array.isArray(response.content) && response.content.length > 0) {
+    const sibling = response.content.find((p) => p?.type === ContentTypes.TEXT);
+    const usePlainString = sibling != null && typeof sibling[ContentTypes.TEXT] === 'string';
     response.content.push({
       type: ContentTypes.TEXT,
-      [ContentTypes.TEXT]: { value: footer },
+      [ContentTypes.TEXT]: usePlainString ? footer : { value: footer },
     });
   }
+  return footer;
 }
 
 function createCloseHandler(abortController) {
@@ -340,6 +458,16 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
           !editedContent &&
           !wasAbortedBeforeComplete;
 
+        // Append the pi file-links footer BEFORE emitting the final event:
+        // execute_skill runs are re-collected and filtered against the LLM's
+        // final summary here. The DB patch of the graph-saved message is
+        // fire-and-forget (durability only) — nothing post-summary may block
+        // the final event.
+        const piFooter = await appendPiFileLinks(req, response);
+        if (piFooter && client.savedMessageIds?.has(messageId)) {
+          appendPiLinksToSavedMessage(messageId, piFooter);
+        }
+
         // Save user message BEFORE sending final event to avoid race condition
         // where client refetch happens before database is updated
         if (!client.skipSaveUserMessage && userMessage) {
@@ -351,14 +479,10 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
         // CRITICAL: Save response message BEFORE emitting final event.
         // This prevents race conditions where the client sends a follow-up message
         // before the response is saved to the database, causing orphaned parentMessageIds.
+        // CRITICAL: Save response message BEFORE emitting final event.
+        // This prevents race conditions where the client sends a follow-up message
+        // before the response is saved to the database, causing orphaned parentMessageIds.
         if (client.savedMessageIds && !client.savedMessageIds.has(messageId)) {
-          // Append staged pi file-links footer (collectPiGeneratedFiles +
-          // buildPiFileDownloadUrl, staged by execute_skill / execute_code pi
-          // sync) to the response text and content parts — same surface as
-          // the one-pi chat buildFileLinks, so download links are visible in
-          // the message body regardless of whether the LLM relayed them from
-          // the collapsed tool output.
-          appendPiFileLinks(req, response);
           await saveMessage(
             req,
             {
@@ -749,7 +873,7 @@ const _LegacyAgentController = async (req, res, next, initializeClient, addTitle
     if (!job.abortController.signal.aborted) {
       // Create a new response object with minimal copies
       const finalResponse = { ...response };
-      appendPiFileLinks(req, finalResponse);
+      await appendPiFileLinks(req, finalResponse);
 
       sendEvent(res, {
         final: true,

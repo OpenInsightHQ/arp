@@ -46,116 +46,13 @@ const { getUserPluginAuthValue } = require('~/server/services/PluginService');
 const { createMCPTool, createMCPTools } = require('~/server/services/MCP');
 const { loadAuthValues } = require('~/server/services/Tools/credentials');
 const { getMCPServerTools } = require('~/server/services/Config');
-const {
-  isPIConfigured,
-  handlePIToolCall,
-  downloadPIFile,
-  buildPiFileLinks,
-  filterPiResultFiles,
-  readPiTextFile,
-} = require('~/server/services/PIService');
+const { isPIConfigured, handlePIToolCall, readPiTextFile } = require('~/server/services/PIService');
 const { scheduleBackgroundSkillFileCollection } = require('~/server/services/BackgroundSkillFiles');
 const { DynamicStructuredTool } = require('@langchain/core/tools');
 const { z } = require('zod');
 const { getRoleByName } = require('~/models/Role');
-const { createFile } = require('~/models');
 const { GallerySqlQuery, GalleryVersion } = require('~/models');
 const { GalleryArtifact } = require('~/models/GalleryArtifact');
-
-const fs = require('fs');
-const path = require('path');
-const { v4: uuidv4 } = require('uuid');
-
-const MAX_PI_FILE_SIZE_BYTES = parseInt(process.env.PI_UPLOAD_LIMIT_MB || '1024', 10) * 1024 * 1024;
-
-const pathSeparatorRegex = /[\\/\0]/;
-
-const sanitizeFileName = (name) => path.basename(name).replace(/[\\/:*?"<>|]/g, '_');
-
-const downloadAndSavePIFiles = async (generatedFiles, userId) => {
-  if (!generatedFiles || generatedFiles.length === 0) {
-    return [];
-  }
-
-  const savedFiles = [];
-
-  for (const fileInfo of generatedFiles) {
-    try {
-      const downloadResult = await downloadPIFile(
-        {
-          sessionId: fileInfo.sessionId,
-          filename: fileInfo.name,
-          agentId: fileInfo.agentId,
-        },
-        userId,
-      );
-
-      if (!downloadResult.success) {
-        logger.error(
-          `[downloadAndSavePIFiles] Failed to download ${fileInfo.name}: ${downloadResult.error}`,
-        );
-        continue;
-      }
-
-      const buffer = downloadResult.data.buffer;
-      const mimeType =
-        downloadResult.data.mimeType || fileInfo.mimeType || 'application/octet-stream';
-
-      if (buffer.length > MAX_PI_FILE_SIZE_BYTES) {
-        logger.error(
-          `[downloadAndSavePIFiles] File "${fileInfo.name}" (${buffer.length} bytes) exceeds max size of ${MAX_PI_FILE_SIZE_BYTES} bytes`,
-        );
-        continue;
-      }
-
-      if (pathSeparatorRegex.test(userId)) {
-        logger.error(`[downloadAndSavePIFiles] Invalid userId: ${userId}`);
-        continue;
-      }
-
-      const safeName = sanitizeFileName(fileInfo.name);
-      const fileId = uuidv4();
-      const filename = `${fileId}_${safeName}`;
-
-      const uploadPath = path.join('uploads', userId, filename);
-      const uploadDir = path.dirname(uploadPath);
-
-      if (!fs.existsSync(uploadDir)) {
-        fs.mkdirSync(uploadDir, { recursive: true });
-      }
-
-      fs.writeFileSync(uploadPath, buffer);
-
-      await createFile({
-        file_id: fileId,
-        user: userId,
-        filename: fileInfo.name,
-        filepath: `/uploads/${userId}/${filename}`,
-        type: mimeType,
-        bytes: buffer.length,
-        source: 'local',
-        context: 'pi_generated',
-        metadata: {
-          originalName: fileInfo.name,
-          mimeType,
-          size: fileInfo.size,
-        },
-      });
-
-      savedFiles.push({
-        file_id: fileId,
-        filename: fileInfo.name,
-        filepath: `/uploads/${userId}/${filename}`,
-        type: mimeType,
-        size: buffer.length,
-      });
-    } catch (error) {
-      logger.error(`[downloadAndSavePIFiles] Error processing ${fileInfo.name}:`, error);
-    }
-  }
-
-  return savedFiles;
-};
 
 const createPITools = (options = {}) => {
   const tools = [];
@@ -178,24 +75,28 @@ const createPITools = (options = {}) => {
   const sessionId = conversationId || undefined;
 
   /**
-   * Stash the canonical pi file-links footer (same "📎 下载文件" markdown as
-   * the one-pi chat surface) on the request so the controller appends it to
-   * the final response message text before saving — file links must not
-   * depend on the LLM relaying them from the collapsed tool output.
-   *
-   * Filtering source: ONLY the skill's prose output (`output`), never the
-   * "Generated Files:" block that formatSkillResult appends to the tool
-   * output (that block lists every workspace file, which would defeat the
-   * mention filter and flood the footer with intermediates).
+   * Defer the pi file-links footer to the END of the turn: record the skill
+   * run (agentId/sessionId/userId/startedAt) on the request so the
+   * controller, AFTER the LLM wrote its final summary, re-runs
+   * collectPiGeneratedFiles, filters the files against the summary text
+   * (whole-token mention match) and appends canonical download links
+   * (buildPiFileDownloadUrl). Staging prebuilt links at tool-call time
+   * relied on the skill's raw output for filtering and on the LLM
+   * preserving relayed links from the collapsed tool output — both unstable.
    */
-  const stagePiFileLinks = (files, text) => {
-    if (!req || !Array.isArray(files) || files.length === 0) {
+  const stagePiSkillRun = (startedAt) => {
+    if (!req || !startedAt) {
       return;
     }
-    const links = buildPiFileLinks(filterPiResultFiles(files, text || null));
-    if (links) {
-      req._piFileLinksText = (req._piFileLinksText || '') + links;
+    if (!Array.isArray(req._piSkillRuns)) {
+      req._piSkillRuns = [];
     }
+    req._piSkillRuns.push({
+      agentId: effectiveAgentId,
+      sessionId,
+      userId,
+      startedAt,
+    });
   };
 
   /**
@@ -279,19 +180,6 @@ const createPITools = (options = {}) => {
     }
   };
 
-  const emitAttachment = async (attachment) => {
-    if (streamId) {
-      try {
-        await GenerationJobManager.emitChunk(streamId, {
-          event: 'attachment',
-          data: attachment,
-        });
-      } catch (err) {
-        logger.error('[PITools] Failed to emit attachment:', err.message);
-      }
-    }
-  };
-
   const formatSkillResult = (result) => {
     if (!result.success) {
       return `Error: ${result.error}`;
@@ -318,11 +206,10 @@ const createPITools = (options = {}) => {
         if (file.size) {
           output += ` (${(file.size / 1024).toFixed(2)} KB)`;
         }
-        if (file.url) {
-          output += `\n  Download: ${file.url}`;
-        }
         output += '\n';
       }
+      output +=
+        '\nWhen summarizing the result for the user, mention the deliverable file names exactly as listed above.';
     }
 
     return output;
@@ -387,36 +274,16 @@ Rules:
         userId,
       );
 
-      // Persist skill output files as real message attachments: download
-      // from pi, save to uploads, emit attachment events. Files then render
-      // in the attachment area with working download links instead of living
-      // only in the collapsed tool output.
+      // No server-side download: the download-links footer (appended by the
+      // controller after the LLM's summary) points straight at pi's download
+      // endpoint, so the browser streams files directly from pi. Downloading
+      // here would stall the tool call (sequential 60s-timeout fetches) and
+      // duplicate storage.
       if (result.success && !result.background && result.data?.files?.length > 0) {
-        // Also stage the canonical pi download-links footer so the controller
-        // appends it to the final response text (same surface as one-pi chat) —
-        // links must not depend on the LLM relaying them.
-        stagePiFileLinks(result.data.files, result.data.output);
-
-        const skillFiles = result.data.files
-          .filter((f) => f.path || f.name)
-          .map((f) => ({
-            sessionId,
-            agentId: effectiveAgentId,
-            name: f.path || f.name,
-            mimeType: f.mimeType,
-          }));
-        const savedSkillFiles = await downloadAndSavePIFiles(skillFiles, userId);
-
-        for (const file of savedSkillFiles) {
-          await emitAttachment({
-            messageId: streamId,
-            file_id: file.file_id,
-            filename: file.filename,
-            filepath: file.filepath,
-            type: file.type,
-            size: file.size,
-          });
-        }
+        // Defer the download-links footer: stage the run so the controller
+        // collects + filters the files against the LLM's final summary once
+        // the turn completes.
+        stagePiSkillRun(result.data.startedAt);
       }
 
       // Deadline hit: pi keeps executing in the background. Watch the pi skill

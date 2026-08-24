@@ -59,7 +59,6 @@ class StreamLogCollector {
       this.cached = this.chunks.join('');
       this.chunks = [];
     }
-    logger.info(`[StreamLog] getLog() → ${this.cached.length} chars`);
     return this.cached;
   }
 

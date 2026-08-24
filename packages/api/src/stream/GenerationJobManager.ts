@@ -804,14 +804,6 @@ class GenerationJobManagerClass {
     // Track user message from created event
     this.trackUserMessage(streamId, event);
 
-    // Debug log for pi_thinking events
-    const eventObj = event as Record<string, unknown>;
-    if (eventObj.event === 'pi_thinking') {
-      logger.info(
-        `[GenerationJobManager] emitChunk pi_thinking for ${streamId}, hasSubscriber: ${runtime?.hasSubscriber}`,
-      );
-    }
-
     // For Redis mode, persist chunk for later reconstruction (fire-and-forget for resumability)
     if (this._isRedis) {
       // The SSE event structure is { event: string, data: unknown, ... }

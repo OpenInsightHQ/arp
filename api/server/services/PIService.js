@@ -643,6 +643,10 @@ const readPrompt = async ({ key, userId, agentId }) => {
  * @param {string|Date} [modifiedSince] - optional mtime filter
  * @returns {Promise<Array<{name: string; path: string; url: string; mimeType: string|null; size: number|null; lastModified: string|null}>>}
  */
+const PI_FILES_LIST_TIMEOUT_MS = 15_000;
+/** Max wait for /execute-agent-skill response headers (stream body is governed by the idle deadline). */
+const PI_HEADER_TIMEOUT_MS = 30_000;
+
 const listPiFiles = async (agentId, sessionId, userId, modifiedSince) => {
   if (!agentId || !sessionId) {
     return [];
@@ -654,9 +658,13 @@ const listPiFiles = async (agentId, sessionId, userId, modifiedSince) => {
       url += `&modifiedSince=${encodeURIComponent(new Date(modifiedSince).toISOString())}`;
     }
 
+    // Hard timeout: this listing runs inside the response path (footer
+    // building) — a hung pi must degrade to "no footer", never block the
+    // final event.
     const response = await fetch(url, {
       method: 'GET',
       headers: { 'api-key': PI_API_KEY, 'X-User-Id': String(userId ?? 'system') },
+      signal: AbortSignal.timeout(PI_FILES_LIST_TIMEOUT_MS),
     });
 
     if (!response.ok) {
@@ -861,7 +869,7 @@ const isMentionedInText = (name, text) => {
  * prose mentions them (skills routinely narrate "edited sharedStrings.xml
  * in ./xlsx_work/" while the actual deliverable is the repacked original).
  */
-const INTERMEDIATE_DIR_PATTERN = /(^|\/)([^/]*_work|work|temp|tmp|\.tmp)(\/|$)/i;
+const INTERMEDIATE_DIR_PATTERN = /(^|\/)([^/]*_work\d*|work|temp|tmp|\.tmp)(\/|$)/i;
 
 const isIntermediateArtifact = (filePath) => INTERMEDIATE_DIR_PATTERN.test(String(filePath || ''));
 
@@ -921,6 +929,44 @@ const buildPiFileLinks = (files) => {
 };
 
 /**
+ * Persist the pi file-links footer onto an already-saved response message
+ * so the links survive page refresh. Matches by the messageId STRING field —
+ * NOT _id (an ObjectId; passing the messageId uuid to findByIdAndUpdate is a
+ * silent CastError). Appends to `text` and, only when the message has
+ * content parts, a trailing TEXT part.
+ * @param {string} messageId
+ * @param {string} links
+ */
+const appendPiLinksToSavedMessage = async (messageId, links) => {
+  if (!messageId || !links) {
+    return;
+  }
+  try {
+    const { Message } = require('~/db/models');
+    // Stored message content parts keep the server shape (text as plain
+    // string) — same as BaseClient's editedContent writes.
+    await Message.updateOne({ messageId }, [
+      {
+        $set: {
+          text: { $concat: [{ $ifNull: ['$text', ''] }, links] },
+          content: {
+            $cond: [
+              { $isArray: '$content' },
+              {
+                $concatArrays: ['$content', [{ type: 'text', text: links }]],
+              },
+              '$$REMOVE',
+            ],
+          },
+        },
+      },
+    ]);
+  } catch (error) {
+    logger.warn('[PIService] appendPiLinksToSavedMessage failed:', error.message);
+  }
+};
+
+/**
  * Executes a skill on the PI backend via `/prompt` with a `/skill:${skillName}`
  * message (same trigger format as GallerySkillTaskExecutor), using the current
  * agentId/sessionId/userId. Streams progress via callbacks and returns the
@@ -959,6 +1005,12 @@ const executeSkill = async (
     // one (e.g. no job metadata), fall back to pi.system.
     const useAgentPrompt =
       typeof agentSystemPrompt === 'string' && agentSystemPrompt.trim().length > 0;
+    // Header-wait guard: the idle-read deadline below only starts once the
+    // fetch resolves, so a pi that accepts the connection but never sends
+    // headers would hang the tool call forever. Abort only during the header
+    // wait; once streaming starts, the per-read deadline governs.
+    const headerAbort = new AbortController();
+    const headerTimer = setTimeout(() => headerAbort.abort(), PI_HEADER_TIMEOUT_MS);
     const response = await fetch(`${PI_HOST}/execute-agent-skill`, {
       method: 'POST',
       headers: {
@@ -977,7 +1029,9 @@ const executeSkill = async (
           ? { agentSystemPrompt }
           : { fallbackSystemPrompt: await getPiSystemPrompt() }),
       }),
+      signal: headerAbort.signal,
     });
+    clearTimeout(headerTimer);
 
     if (!response.ok) {
       const errText = await response.text();
@@ -1109,6 +1163,7 @@ const executeSkill = async (
         message,
         output,
         files,
+        startedAt: startedAt.toISOString(),
       },
     };
   } catch (error) {
@@ -1176,7 +1231,9 @@ module.exports = {
   collectPiGeneratedFiles,
   buildPiFileDownloadUrl,
   buildPiFileLinks,
+  appendPiLinksToSavedMessage,
   filterPiResultFiles,
+  isIntermediateArtifact,
   MAX_PI_RESULT_FILES,
   listPiFiles,
   readPiTextFile,
