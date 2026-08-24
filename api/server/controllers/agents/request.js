@@ -130,6 +130,22 @@ async function buildSkillRunFooter(skillRuns, summaryText) {
 }
 
 /**
+ * Collect the response's visible text (message `text` + TEXT content parts)
+ * so staged download links can be checked for prior presence.
+ * @param {Partial<TMessage>} response
+ * @returns {string}
+ */
+function collectResponseText(response) {
+  let text = response.text || '';
+  if (Array.isArray(response.content)) {
+    for (const part of response.content) {
+      text += textPartValue(part);
+    }
+  }
+  return text;
+}
+
+/**
  * Append the pi file-links footer to the response message so the download
  * links render on the page. Agent messages may be dual-content (content-parts
  * array with empty `text`), so the footer is appended to BOTH `text` and a
@@ -142,20 +158,35 @@ async function buildSkillRunFooter(skillRuns, summaryText) {
  *   summary text (whole-token mention match), then build the footer from
  *   buildPiFileDownloadUrl links. Link accuracy never depends on the LLM
  *   relaying URLs from the collapsed tool output.
- * - req._piFileLinksText (execute_code pi sync): exact tool artifacts, kept
- *   as-is without mention filtering.
+ * - req._piCodeOutputFiles (execute_code pi sync): exact tool artifacts, kept
+ *   without mention filtering, but deduped — the pi compat layer
+ *   (chatCompletions buildFileLinks) may have already streamed the same file's
+ *   link into the response text, and same-name files staged by multiple tool
+ *   calls collapse to one link.
  *
  * @param {ServerRequest} req
  * @param {Partial<TMessage>} response
  * @returns {Promise<string | null>} the appended footer, or null
  */
 async function appendPiFileLinks(req, response) {
-  const stagedLinks = req._piFileLinksText;
+  const stagedFiles = req._piCodeOutputFiles;
   const skillRuns = req._piSkillRuns;
-  delete req._piFileLinksText;
+  delete req._piCodeOutputFiles;
   delete req._piSkillRuns;
 
-  let footer = stagedLinks || '';
+  let footer = '';
+  if (Array.isArray(stagedFiles) && stagedFiles.length > 0) {
+    const responseText = collectResponseText(response);
+    const seen = new Set();
+    const unstaged = stagedFiles.filter((file) => {
+      if (!file?.name || !file?.url || seen.has(file.name)) {
+        return false;
+      }
+      seen.add(file.name);
+      return !responseText.includes(file.url);
+    });
+    footer += buildPiFileLinks(unstaged) || '';
+  }
   if (Array.isArray(skillRuns) && skillRuns.length > 0) {
     footer += await buildSkillRunFooter(skillRuns, extractSummaryText(response));
   }

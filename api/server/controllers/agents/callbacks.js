@@ -15,7 +15,7 @@ const { processFileCitations } = require('~/server/services/Files/Citations');
 const { processCodeOutput, syncCodeOutputToPi } = require('~/server/services/Files/Code/process');
 const { loadAuthValues } = require('~/server/services/Tools/credentials');
 const { saveBase64Image } = require('~/server/services/Files/process');
-const { isPIConfigured, buildPiFileLinks } = require('~/server/services/PIService');
+const { isPIConfigured } = require('~/server/services/PIService');
 
 class ModelEndHandler {
   /**
@@ -313,11 +313,27 @@ function writeAttachment(res, streamId, attachment) {
  *   when syncing execute_code outputs back to PI.
  * @returns {ToolEndCallback} The tool end callback.
  */
+/**
+ * Record a code-env file synced into the pi workspace for the final
+ * download-links footer. Structured staging (not prebuilt markdown) lets the
+ * controller dedupe against links the pi compat layer may already have
+ * streamed into the response text — otherwise the same file renders two
+ * download links in one message.
+ * @param {ServerRequest} req
+ * @param {{ name: string; url: string }} piFile
+ */
+function stagePiCodeOutputFile(req, piFile) {
+  if (!req._piCodeOutputFiles) {
+    req._piCodeOutputFiles = [];
+  }
+  req._piCodeOutputFiles.push({ name: piFile.name, url: piFile.url });
+}
+
 function createToolEndCallback({ req, res, artifactPromises, streamId = null, piAgentIdRef }) {
   /**
-   * Upload a code-env output file to the PI workspace and stage the canonical
-   * download-links footer (req._piFileLinksText) so the controller appends it
-   * to the final response text — the same surface execute_skill uses.
+   * Upload a code-env output file to the PI workspace and stage it for the
+   * final download-links footer (req._piCodeOutputFiles) so the controller
+   * appends the canonical link — the same surface execute_skill uses.
    * Returns the canonical PI attachment record (file_id/filename/filepath with
    * the /arp/api/pi/files/download URL) or null.
    */
@@ -340,10 +356,7 @@ function createToolEndCallback({ req, res, artifactPromises, streamId = null, pi
       if (!piFile) {
         return null;
       }
-      const links = buildPiFileLinks([piFile]);
-      if (links) {
-        req._piFileLinksText = (req._piFileLinksText || '') + links;
-      }
+      stagePiCodeOutputFile(req, piFile);
       return {
         file_id: piFile.name,
         temp_file_id: piFile.name,
@@ -769,10 +782,7 @@ function createResponsesToolEndCallback({ req, res, tracker, artifactPromises })
                   }).catch(() => null)
                 : null;
             if (piFile) {
-              const links = buildPiFileLinks([piFile]);
-              if (links) {
-                req._piFileLinksText = (req._piFileLinksText || '') + links;
-              }
+              stagePiCodeOutputFile(req, piFile);
               const piAttachment = {
                 file_id: piFile.name,
                 filename: piFile.name,
