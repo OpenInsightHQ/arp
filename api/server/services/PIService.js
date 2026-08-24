@@ -829,6 +829,14 @@ const buildPiFileDownloadUrl = (agentId, sessionId, path) =>
   `/arp/api/pi/files/download?agentId=${encodeURIComponent(String(agentId))}&sessionId=${encodeURIComponent(String(sessionId))}&path=${encodeURIComponent(String(path))}`;
 
 /**
+ * Clock-skew grace for mtime filtering: callers derive `modifiedSince` from
+ * the LOCAL clock (turn start), but pi stamps file mtimes with the PI SERVER
+ * clock. A local clock even ~20s ahead filters out files generated during the
+ * turn (pi's comparison is strictly `>`), so widen the window before sending.
+ */
+const PI_FILES_SINCE_GRACE_MS = 5 * 60_000;
+
+/**
  * List files generated in a pi session (recursive, optionally filtered by
  * mtime) as structured records with download URLs.
  *
@@ -836,11 +844,19 @@ const buildPiFileDownloadUrl = (agentId, sessionId, path) =>
  * - execute_skill tool results (files attached to the agent message)
  * - GallerySkillTaskRun.files
  * - one-pi chat buildFileLinks
+ *
+ * Older files that slip in through the grace window are excluded downstream
+ * by the text-mention filter (filterPiResultFiles).
  */
 const collectPiGeneratedFiles = (agentId, sessionId, userId, modifiedSince) =>
-  listPiFiles(agentId, sessionId, userId, modifiedSince).then((files) =>
-    files.map(({ lastModified: _lastModified, ...file }) => file),
-  );
+  listPiFiles(
+    agentId,
+    sessionId,
+    userId,
+    modifiedSince != null
+      ? new Date(new Date(modifiedSince).getTime() - PI_FILES_SINCE_GRACE_MS)
+      : undefined,
+  ).then((files) => files.map(({ lastModified: _lastModified, ...file }) => file));
 
 /** Backwards-compatible alias for existing executeSkill call sites. */
 const collectSkillFiles = collectPiGeneratedFiles;
@@ -890,16 +906,18 @@ const filterPiResultFiles = (files, text = null) => {
     return [];
   }
 
+  const isHiddenEntry = (f) => ((f.path || f.name || '').split('/').pop() || '').startsWith('.');
+
   const pool =
     text != null
       ? files.filter((f) => {
-          if (isIntermediateArtifact(f.path || f.name)) {
+          if (isIntermediateArtifact(f.path || f.name) || isHiddenEntry(f)) {
             return false;
           }
           const basename = (f.path || f.name || '').split('/').pop();
           return isMentionedInText(basename, text) || isMentionedInText(f.path, text);
         })
-      : files;
+      : files.filter((f) => !isHiddenEntry(f));
 
   const seen = new Set();
   const uniqueFiles = [];
