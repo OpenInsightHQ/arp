@@ -27,7 +27,7 @@ async function buildFileLinks(text, agentId, sessionId, userId, startTime) {
   const realFiles = await collectPiGeneratedFiles(agentId, sessionId, userId, startTime);
 
   if (realFiles.length === 0) {
-    console.log('[buildFileLinks] No real files found, skipping link injection');
+    console.log(`[buildFileLinks] No files for agentId=${agentId} sessionId=${sessionId} userId=${userId} — skipping link injection`);
     return null;
   }
 
@@ -678,7 +678,13 @@ const piChatCompletionsController = async (req, res) => {
     return res.status(400).json({ error: { message: 'No user message found' } });
   }
 
-  const userId = req.user?.id || user || 'system';
+  // Server-to-server call (agents graph → custom endpoint baseURL): no JWT on
+  // this route, so the real user id arrives via the X-User-Id header staged by
+  // buildPiForwardHeaders (initialize.ts) or the body `user` field. Falling
+  // back to 'system' would list pi's per-user workspace as the wrong user →
+  // empty file listing → no download links.
+  const userId =
+    req.user?.id || req.headers['x-user-id'] || user || 'system';
   const model = req.body.model || 'one-pi';
   const appConfig = await getAppConfig();
   const endpointConfig = getCustomEndpointConfig({ endpoint: 'pi', appConfig });

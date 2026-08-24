@@ -5,6 +5,7 @@ function buildPiForwardHeaders(
   userMessageId?: string,
   responseMessageId?: string,
   parentMessageId?: string,
+  userId?: string,
 ) {
   return {
     ...(existingHeaders || {}),
@@ -16,6 +17,11 @@ function buildPiForwardHeaders(
     // persistence to the correct parent instead of inferring "last message"
     // (which can race/fork the tree, e.g. after an aborted turn).
     ...(parentMessageId ? { 'X-Parent-Message-Id': parentMessageId } : {}),
+    // The /api/pi/chat/completions route has no JWT (server-to-server call
+    // from the agents graph); without this header it falls back to the
+    // 'system' user, whose pi /files listing is empty (per-user workspace
+    // ACL) — breaking generated-file download links.
+    ...(userId ? { 'X-User-Id': userId } : {}),
   };
 }
 
