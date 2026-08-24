@@ -4,7 +4,7 @@ const axios = require('axios');
 const { Readable } = require('stream');
 const { logger } = require('@librechat/data-schemas');
 const { getCodeBaseURL } = require('@librechat/agents');
-const { logAxiosError, getBasePath, createAxiosInstance } = require('@librechat/api');
+const { logAxiosError, getBasePath } = require('@librechat/api');
 const {
   Tools,
   megabyte,
@@ -25,16 +25,11 @@ const { convertImage } = require('~/server/services/Files/images/convert');
 const { determineFileType } = require('~/server/utils');
 const {
   isPIConfigured,
-  executeCode,
-  getPIFiles,
   listPiFiles,
   downloadPIFile,
   uploadFile: uploadFileToPI,
   buildPiFileDownloadUrl,
 } = require('~/server/services/PIService');
-
-const PI_API_KEY = process.env.PI_API_KEY;
-const PI_HOST = process.env.PI_HOST;
 
 /**
  * Creates a fallback download URL response when file cannot be processed locally.
@@ -276,24 +271,6 @@ async function getSessionInfo(fileIdentifier, apiKey) {
     let queryParams = {};
     if (queryString) {
       queryParams = Object.fromEntries(new URLSearchParams(queryString).entries());
-    }
-
-    if (false) {
-      const axiosInstance = createAxiosInstance();
-      const response = await axiosInstance({
-        method: 'get',
-        url: `${PI_HOST}/files/${session_id}`,
-        params: {
-          detail: 'summary',
-          ...queryParams,
-        },
-        headers: {
-          'User-Agent': 'LibreChat/1.0',
-          'api-key': PI_API_KEY,
-        },
-        timeout: 5000,
-      });
-      return response.data.find((file) => file.name.startsWith(path))?.lastModified;
     }
 
     const baseURL = getCodeBaseURL();
@@ -632,192 +609,9 @@ const syncCodeOutputToPi = async ({
   }
 };
 
-const processPIOutput = async ({
-  req,
-  id,
-  name,
-  toolCallId,
-  conversationId,
-  messageId,
-  session_id,
-}) => {
-  const appConfig = req.config;
-  const currentDate = new Date();
-  const fileExt = path.extname(name).toLowerCase();
-  const isImage = fileExt && imageExtRegex.test(name);
-
-  const mergedFileConfig = mergeFileConfig(appConfig.fileConfig);
-  const endpointFileConfig = getEndpointFileConfig({
-    fileConfig: mergedFileConfig,
-    endpoint: EModelEndpoint.agents,
-  });
-  const fileSizeLimit = endpointFileConfig.fileSizeLimit ?? mergedFileConfig.serverFileSizeLimit;
-
-  try {
-    const formattedDate = currentDate.toISOString();
-    const axiosInstance = createAxiosInstance();
-    const response = await axiosInstance({
-      method: 'get',
-      url: `${PI_HOST}/files/${session_id}/${id}`,
-      responseType: 'arraybuffer',
-      headers: {
-        'User-Agent': 'LibreChat/1.0',
-        'api-key': PI_API_KEY,
-      },
-      timeout: 30000,
-    });
-
-    const buffer = Buffer.from(response.data, 'binary');
-
-    if (buffer.length > fileSizeLimit) {
-      logger.warn(
-        `[processPIOutput] File "${name}" (${(buffer.length / megabyte).toFixed(2)} MB) exceeds size limit`,
-      );
-      return createDownloadFallback({
-        id,
-        name,
-        messageId,
-        toolCallId,
-        session_id,
-        conversationId,
-        expiresAt: currentDate.getTime() + 86400000,
-      });
-    }
-
-    const fileIdentifier = `${session_id}/${id}`;
-    const newFileId = v4();
-    const claimed = await claimCodeFile({
-      filename: name,
-      conversationId,
-      file_id: newFileId,
-      user: req.user.id,
-    });
-    const file_id = claimed.file_id;
-    const isUpdate = file_id !== newFileId;
-
-    if (isImage) {
-      const usage = isUpdate ? (claimed.usage ?? 0) + 1 : 1;
-      const _file = await convertImage(req, buffer, 'high', `${file_id}${fileExt}`);
-      const filepath = usage > 1 ? `${_file.filepath}?v=${Date.now()}` : _file.filepath;
-      const file = {
-        ..._file,
-        filepath,
-        file_id,
-        messageId,
-        usage,
-        filename: name,
-        conversationId,
-        user: req.user.id,
-        type: `image/${appConfig.imageOutputType}`,
-        createdAt: isUpdate ? claimed.createdAt : formattedDate,
-        updatedAt: formattedDate,
-        source: appConfig.fileStrategy,
-        context: FileContext.execute_code,
-        metadata: { fileIdentifier },
-      };
-      await createFile(file, true);
-      return Object.assign(file, { messageId, toolCallId });
-    }
-
-    const { saveBuffer } = getStrategyFunctions(appConfig.fileStrategy);
-    if (!saveBuffer) {
-      logger.warn(
-        `[processPIOutput] saveBuffer not available for strategy ${appConfig.fileStrategy}`,
-      );
-      return createDownloadFallback({
-        id,
-        name,
-        messageId,
-        toolCallId,
-        session_id,
-        conversationId,
-        expiresAt: currentDate.getTime() + 86400000,
-      });
-    }
-
-    const detectedType = await determineFileType(buffer, true);
-    const mimeType = detectedType?.mime || inferMimeType(name, '') || 'application/octet-stream';
-
-    const fileName = `${file_id}__${name}`;
-    const filepath = await saveBuffer({
-      userId: req.user.id,
-      buffer,
-      fileName,
-      basePath: 'uploads',
-    });
-
-    const file = {
-      file_id,
-      filepath,
-      messageId,
-      object: 'file',
-      filename: name,
-      type: mimeType,
-      conversationId,
-      user: req.user.id,
-      bytes: buffer.length,
-      updatedAt: formattedDate,
-      metadata: { fileIdentifier },
-      source: appConfig.fileStrategy,
-      context: FileContext.execute_code,
-      usage: isUpdate ? (claimed.usage ?? 0) + 1 : 1,
-      createdAt: isUpdate ? claimed.createdAt : formattedDate,
-    };
-
-    await createFile(file, true);
-    return Object.assign(file, { messageId, toolCallId });
-  } catch (error) {
-    logAxiosError({
-      message: 'Error downloading/processing PI file',
-      error,
-    });
-
-    return createDownloadFallback({
-      id,
-      name,
-      messageId,
-      toolCallId,
-      session_id,
-      conversationId,
-      expiresAt: currentDate.getTime() + 86400000,
-    });
-  }
-};
-
-const processCodeOutputWithPI = async (params) => {
-  const { req, id, name, apiKey, toolCallId, conversationId, messageId, session_id } = params;
-
-  if (isPIConfigured(req)) {
-    logger.debug('[processCodeOutputWithPI] Using PI for code execution output');
-    return processPIOutput({
-      req,
-      id,
-      name,
-      toolCallId,
-      conversationId,
-      messageId,
-      session_id,
-    });
-  }
-
-  logger.debug('[processCodeOutputWithPI] Using default code executor');
-  return processCodeOutput({
-    req,
-    id,
-    name,
-    apiKey,
-    toolCallId,
-    conversationId,
-    messageId,
-    session_id,
-  });
-};
-
 module.exports = {
   primeFiles,
   syncPiFilesToCodeEnv,
   syncCodeOutputToPi,
   processCodeOutput,
-  processPIOutput,
-  processCodeOutputWithPI,
 };

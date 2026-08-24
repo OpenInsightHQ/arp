@@ -12,11 +12,7 @@ const {
   extractCacheTokens,
 } = require('@librechat/api');
 const { processFileCitations } = require('~/server/services/Files/Citations');
-const {
-  processCodeOutput,
-  syncCodeOutputToPi,
-  processCodeOutputWithPI,
-} = require('~/server/services/Files/Code/process');
+const { processCodeOutput, syncCodeOutputToPi } = require('~/server/services/Files/Code/process');
 const { loadAuthValues } = require('~/server/services/Tools/credentials');
 const { saveBase64Image } = require('~/server/services/Files/process');
 const { isPIConfigured, buildPiFileLinks } = require('~/server/services/PIService');
