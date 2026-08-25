@@ -55,7 +55,7 @@ export async function loadDefaultInterface({
     fileCitations: interfaceConfig?.fileCitations,
     peoplePicker: interfaceConfig?.peoplePicker,
     marketplace: interfaceConfig?.marketplace,
-    pi: interfaceConfig?.pi,
+    pi: interfaceConfig?.pi ?? defaults.pi,
   });
 
   return loadedInterface;
