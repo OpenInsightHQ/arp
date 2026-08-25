@@ -720,7 +720,7 @@ export const interfaceSchema = z
       share: false,
       public: false,
     },
-    pi: false,
+    pi: true,
   });
 
 export type TInterfaceConfig = z.infer<typeof interfaceSchema>;
