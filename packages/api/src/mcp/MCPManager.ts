@@ -320,6 +320,7 @@ Please follow these instructions when using tools from the respective MCP server
       if (requestBody?.conversationId) {
         defaultHeaders['x-conversation-id'] = requestBody.conversationId;
       }
+      defaultHeaders['accept-language'] = requestBody?.lang || 'en';
 
       const existingHeaders =
         'headers' in currentOptions ? (currentOptions.headers as Record<string, string>) || {} : {};

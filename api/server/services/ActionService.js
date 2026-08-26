@@ -174,6 +174,10 @@ async function createActionTool({
       if (contextConversationId) {
         contextHeaders['X-Conversation-Id'] = contextConversationId;
       }
+      const contextLang = config?.configurable?.requestBody?.lang;
+      if (contextLang) {
+        contextHeaders['Accept-Language'] = contextLang;
+      }
       preparedExecutor.setExtraHeaders(contextHeaders);
 
       if (metadata.auth && metadata.auth.type !== AuthTypeEnum.None) {

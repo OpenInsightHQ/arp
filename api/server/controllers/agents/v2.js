@@ -36,6 +36,7 @@ const {
   extractCacheTokens,
   applyCollectedUsageToContentParts,
   createTokenCounter,
+  getLangFromReq,
 } = require('@librechat/api');
 const { loadAgentTools, loadToolsForExecution } = require('~/server/services/ToolService');
 const { createToolEndCallback } = require('~/server/controllers/agents/callbacks');
@@ -689,6 +690,8 @@ const V2ChatCompletionController = async (req, res) => {
 
     // No need to dynamically inject them here
 
+    const requestLang = getLangFromReq(req);
+
     run = await createRun({
       agents: [primaryConfig],
       messages: formattedMessages,
@@ -699,6 +702,7 @@ const V2ChatCompletionController = async (req, res) => {
       requestBody: {
         messageId: responseMessageId,
         conversationId,
+        lang: requestLang,
       },
       user: { id: userSn },
       tokenCounter: createTokenCounter('o200k_base'),
@@ -714,6 +718,11 @@ const V2ChatCompletionController = async (req, res) => {
         thread_id: conversationId,
         user_id: userSn,
         user: createSafeUser({ ...req.user, id: userSn }),
+        requestBody: {
+          messageId: responseMessageId,
+          conversationId,
+          lang: requestLang,
+        },
         ...(userMCPAuthMap != null && { userMCPAuthMap }),
       },
       signal: abortController.signal,

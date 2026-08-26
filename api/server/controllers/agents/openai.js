@@ -38,6 +38,7 @@ const {
   extractToolCallIds,
   extractCacheTokens,
   applyCollectedUsageToContentParts,
+  getLangFromReq,
 } = require('@librechat/api');
 const { loadAgentTools, loadToolsForExecution } = require('~/server/services/ToolService');
 const { createToolEndCallback } = require('~/server/controllers/agents/callbacks');
@@ -552,6 +553,7 @@ const OpenAIChatCompletionController = async (req, res) => {
 
     // Extract userMCPAuthMap from primaryConfig (needed for MCP tool connections)
     const userMCPAuthMap = primaryConfig.userMCPAuthMap;
+    const requestLang = getLangFromReq(req);
 
     const run = await createRun({
       agents: [primaryConfig],
@@ -563,6 +565,7 @@ const OpenAIChatCompletionController = async (req, res) => {
       requestBody: {
         messageId: requestId,
         conversationId,
+        lang: requestLang,
       },
       user: { id: userId },
     });
@@ -578,6 +581,11 @@ const OpenAIChatCompletionController = async (req, res) => {
         thread_id: conversationId,
         user_id: userId,
         user: createSafeUser(req.user),
+        requestBody: {
+          messageId: requestId,
+          conversationId,
+          lang: requestLang,
+        },
         ...(userMCPAuthMap != null && { userMCPAuthMap }),
       },
       signal: abortController.signal,

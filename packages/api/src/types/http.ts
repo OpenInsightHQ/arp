@@ -19,6 +19,8 @@ export type RequestBody = {
   model?: string;
   key?: string;
   endpointOption?: Partial<TEndpointOption>;
+  /** User language code (from `lang` cookie / `Accept-Language` header), forwarded to tool calls */
+  lang?: string;
 };
 
 export type ServerRequest = Request<unknown, unknown, RequestBody> & {

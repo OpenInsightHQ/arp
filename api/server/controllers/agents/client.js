@@ -38,6 +38,7 @@ const {
   createMultiAgentMapper,
   filterMalformedContentParts,
   applyCollectedUsageToContentParts,
+  getLangFromReq,
 } = require('@librechat/api');
 const {
   Callback,
@@ -1062,6 +1063,7 @@ ${historyString}`;
             messageId: this.responseMessageId,
             conversationId: this.conversationId,
             parentMessageId: this.parentMessageId,
+            lang: getLangFromReq(this.options.req),
           },
           user: createSafeUser(this.options.req.user),
         },

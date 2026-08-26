@@ -36,6 +36,7 @@ const {
   createResponsesEventHandlers,
   createAggregatorEventHandlers,
   normalizeArtifactStream,
+  getLangFromReq,
 } = require('@librechat/api');
 const {
   createResponsesToolEndCallback,
@@ -601,6 +602,7 @@ const createResponse = async (req, res) => {
       // Create and run the agent
       const userId = req.user?.id ?? 'api-user';
       const userMCPAuthMap = primaryConfig.userMCPAuthMap;
+      const requestLang = getLangFromReq(req);
 
       const run = await createRun({
         agents: [primaryConfig],
@@ -612,6 +614,7 @@ const createResponse = async (req, res) => {
         requestBody: {
           messageId: responseId,
           conversationId,
+          lang: requestLang,
         },
         user: { id: userId },
       });
@@ -627,6 +630,11 @@ const createResponse = async (req, res) => {
           thread_id: conversationId,
           user_id: userId,
           user: createSafeUser(req.user),
+          requestBody: {
+            messageId: responseId,
+            conversationId,
+            lang: requestLang,
+          },
           ...(userMCPAuthMap != null && { userMCPAuthMap }),
         },
         signal: abortController.signal,
@@ -764,6 +772,7 @@ const createResponse = async (req, res) => {
 
       const userId = req.user?.id ?? 'api-user';
       const userMCPAuthMap = primaryConfig.userMCPAuthMap;
+      const requestLang = getLangFromReq(req);
 
       const run = await createRun({
         agents: [primaryConfig],
@@ -775,6 +784,7 @@ const createResponse = async (req, res) => {
         requestBody: {
           messageId: responseId,
           conversationId,
+          lang: requestLang,
         },
         user: { id: userId },
       });
@@ -789,6 +799,11 @@ const createResponse = async (req, res) => {
           thread_id: conversationId,
           user_id: userId,
           user: createSafeUser(req.user),
+          requestBody: {
+            messageId: responseId,
+            conversationId,
+            lang: requestLang,
+          },
           ...(userMCPAuthMap != null && { userMCPAuthMap }),
         },
         signal: abortController.signal,

@@ -38,6 +38,7 @@ import {
   createChunk,
   writeSSE,
 } from './handlers';
+import { getLangFromReq } from '~/utils';
 import type { ToolExecuteOptions } from '../handlers';
 
 /**
@@ -452,6 +453,7 @@ export async function createAgentChatCompletion(
     // Create and run the agent
     if (deps.createRun) {
       const userId = (req as unknown as { user?: { id?: string } }).user?.id ?? 'api-user';
+      const requestLang = getLangFromReq(req as unknown as Parameters<typeof getLangFromReq>[0]);
 
       const run = await deps.createRun({
         agents: [initializedAgent],
@@ -462,6 +464,7 @@ export async function createAgentChatCompletion(
         requestBody: {
           messageId: requestId,
           conversationId,
+          lang: requestLang,
         },
         user: { id: userId },
       });
@@ -474,6 +477,11 @@ export async function createAgentChatCompletion(
             configurable: {
               thread_id: conversationId,
               user_id: userId,
+              requestBody: {
+                messageId: requestId,
+                conversationId,
+                lang: requestLang,
+              },
             },
             signal: abortController.signal,
             streamMode: 'values',
