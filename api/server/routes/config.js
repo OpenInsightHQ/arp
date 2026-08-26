@@ -119,7 +119,7 @@ router.get('/', async function (req, res) {
     /** @type {TStartupConfig} */
     const payload = {
       appTitle: process.env.APP_TITLE,
-      appVersion: process.env.ARP_VERSION ?? '2.0.2.11',
+      appVersion: process.env.ARP_VERSION ?? '3.0.2',
       socialLogins: appConfig?.registration?.socialLogins ?? defaultSocialLogins,
       discordLoginEnabled: !!process.env.DISCORD_CLIENT_ID && !!process.env.DISCORD_CLIENT_SECRET,
       facebookLoginEnabled:
