@@ -42,8 +42,8 @@ ARP is one component of the Open Insight platform:
   OpenAI-compatible endpoint (GLM, Qwen, DeepSeek, Kimi, Ollama, …).
 - **Any tool** — MCP tool servers, sandboxed code interpreter, web search,
   image generation.
-- **Enterprise-ready access** — OAuth2, OpenID, SAML, LDAP, email login, plus
-  an automatic JWT-based SSO layer.
+- **Any skill** — reusable skills that agents invoke at runtime, shared with
+  ONE-PI: build once, every agent on the platform can call it.
 - **Self-hosted** — your infrastructure, your data, no vendor lock-in.
 - **Built for AI employees** — integrates with ONE-PI (agent platform) and DMP
   (enterprise data & governance) to ground agents in your business.
@@ -162,26 +162,6 @@ docker compose up -d
 Monorepo layout: `/api` (legacy JS backend), `/packages/api` (new TS backend),
 `/packages/data-schemas`, `/packages/data-provider` (shared), `/client` (frontend),
 `/packages/client` (shared frontend utils).
-
----
-
-## Roadmap
-
-- **v1.0** — first public release, production-ready deployment via
-  [openinsight](https://github.com/OpenInsightHQ/openinsight)
-- Deeper ONE-PI integration — expert agents, skills, orchestration
-- More enterprise connectors and identity providers
-- Community agent & MCP templates
-
----
-
-## Contributing
-
-Bug reports, feature ideas, and pull requests are welcome!
-
-- 🐛 [Report a bug](https://github.com/OpenInsightHQ/arp/issues/new?template=bug_report.md) · 💡 [Suggest a feature](https://github.com/OpenInsightHQ/arp/issues/new?template=feature_request.md)
-- Setup & guidelines: [CONTRIBUTING.md](CONTRIBUTING.md)
-- Security vulnerabilities: see [SECURITY.md](SECURITY.md) — please do not open public issues
 
 ---
 
