@@ -80,6 +80,9 @@ ARP is one component of the Open Insight platform:
   and any OpenAI-compatible endpoint (Ollama, DeepSeek, GLM, Qwen, Kimi, …).
 - **Agents & MCP**: no-code custom agents, Model Context Protocol tool servers,
   agent marketplace, and remote agent sharing.
+- **Agent collaboration**: @mention any agent into a conversation — agents
+  cooperate in one thread; semantic routing to the right expert is resolved by
+  ONE-PI.
 - **Generative UI / Artifacts**: React, HTML, and Mermaid diagrams rendered in chat.
 - **Code Interpreter API**: sandboxed Python, Node, Go, C/C++, Java, Rust, and more.
 - **Multimodal & files**: image understanding, file chat, SharePoint picker.
@@ -93,6 +96,11 @@ ARP is one component of the Open Insight platform:
 ---
 
 ## Quick Start
+
+The recommended entry point for the whole platform is
+[openinsight](https://github.com/OpenInsightHQ/openinsight) — one command brings up
+ARP, ONE-PI, and the data layer as a working stack. The steps below run ARP
+standalone, for development or custom deployments.
 
 ### Prerequisites
 
