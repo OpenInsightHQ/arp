@@ -1,13 +1,13 @@
-<h1 align="center">OpenInsight</h1>
+<h1 align="center">ARP — Agent Runtime Platform</h1>
 
 <p align="center">
-  An enterprise-grade, self-hosted AI conversation platform.<br/>
-  Built on top of <a href="https://github.com/danny-avila/LibreChat">LibreChat</a>.
+  The open-source runtime that powers AI employees.<br/>
+  Connect any model, any tool, any enterprise system — on your own infrastructure.
 </p>
 
 <p align="center">
-  <a href="https://github.com/OpenInsightHQ/arp/blob/main/LICENSE">
-    <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg">
+  <a href="#license">
+    <img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue.svg">
   </a>
   <a href="https://nodejs.org">
     <img alt="Node.js" src="https://img.shields.io/badge/node-%E2%89%A520.19-339933.svg?logo=node.js&logoColor=white">
@@ -19,29 +19,58 @@
 
 ---
 
-## Overview
+## What is ARP?
 
-OpenInsight is a self-hosted, multi-user AI chat platform that unifies many model
-providers (OpenAI, Anthropic, Google, Azure, Bedrock, and any OpenAI-compatible
-endpoint) behind a single, polished web UI. It adds an enterprise integration and
-customization layer on top of [LibreChat](https://github.com/danny-avila/LibreChat):
+ARP is an enterprise-grade, self-hosted **agent runtime**. It is where AI employees
+actually run: multi-provider LLM access, no-code agents, MCP tool servers,
+generative UI, sandboxed code execution, and enterprise-grade access control —
+deployed on your own servers.
 
-- **DMP integration** — connects to the Data Management Platform for user lookup,
-  agent context, and an MCP tool bridge.
-- **Automatic SSO** — JWT-based single sign-on from an external auth cookie, with
-  configurable claim-to-user mapping.
-- **UI watermarks** — configurable chat & artifact watermarks (per-department /
-  per-user templates, opacity, density, rotation).
-- **Branded artifacts** — generative UI with Sandpack-backed previews, configurable
-  CDN sources, and CSP allow-lists.
-- **Custom endpoints presets** — opinionated defaults for GLM, Qwen, DeepSeek, Kimi,
-  Tencent LKEAP, and more.
-- **Code Interpreter, Agents, MCP, Web Search, Image Generation** — inherited from
-  upstream LibreChat.
+ARP is one component of the Open Insight platform:
 
-> ℹ️ This project is a fork of [LibreChat](https://github.com/danny-avila/LibreChat)
-> by Danny Avila and contributors. All upstream features are available here; see the
-> [LibreChat docs](https://www.librechat.ai/docs/) for general usage.
+| Component | Role |
+| --- | --- |
+| [openinsight](https://github.com/OpenInsightHQ/openinsight) | One-command deployment & release entry |
+| **ARP** (this repo) | Agent runtime — where AI employees run |
+| [one-pi](https://github.com/OpenInsightHQ/one-pi) | Enterprise agent platform — expert agents & orchestration |
+
+---
+
+## Why ARP?
+
+- **Any model** — OpenAI, Anthropic, Google, Azure, Bedrock, Vertex AI, and any
+  OpenAI-compatible endpoint (GLM, Qwen, DeepSeek, Kimi, Ollama, …).
+- **Any tool** — MCP tool servers, sandboxed code interpreter, web search,
+  image generation.
+- **Enterprise-ready access** — OAuth2, OpenID, SAML, LDAP, email login, plus
+  an automatic JWT-based SSO layer.
+- **Self-hosted** — your infrastructure, your data, no vendor lock-in.
+- **Built for AI employees** — integrates with ONE-PI (agent platform) and DMP
+  (enterprise data & governance) to ground agents in your business.
+
+---
+
+## Screenshots
+
+<p align="center">
+  <img src="docs/screenshots/main-interface.png" alt="ARP main interface" width="820">
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/agent-workspace.png" alt="ARP agent workspace" width="820">
+</p>
+
+---
+
+## Architecture
+
+| Layer | Path | What it does |
+| --- | --- | --- |
+| Web client | `/client` | React front-end — chat, agents, artifacts, presets |
+| API server | `/api`, `/packages/api` | REST & streaming API, auth, integrations |
+| Shared packages | `/packages/*` | `data-provider`, `data-schemas`, shared utils |
+| Configuration | `librechat.yaml` | Endpoints, MCP servers, interface options |
+| Deployment | `docker-compose.yml`, `deploy-compose.yml`, `helm/` | Docker, Compose, Helm |
 
 ---
 
@@ -55,8 +84,10 @@ customization layer on top of [LibreChat](https://github.com/danny-avila/LibreCh
 - **Code Interpreter API**: sandboxed Python, Node, Go, C/C++, Java, Rust, and more.
 - **Multimodal & files**: image understanding, file chat, SharePoint picker.
 - **Multilingual UI** with reasoning-model support.
-- **Multi-user, secure access**: OAuth2, OpenID, SAML, LDAP, email login, plus the
-  OpenInsight automatic SSO layer.
+- **Multi-user, secure access**: OAuth2, OpenID, SAML, LDAP, email login, plus
+  the automatic SSO layer.
+- **Enterprise layer**: DMP integration (user lookup, agent context, MCP tool
+  bridge), UI watermarks, branded Sandpack artifacts, custom endpoint presets.
 - **Resumable streams**, conversation search, presets, message branching, import/export.
 
 ---
@@ -83,7 +114,7 @@ Open `.env` and fill in at least:
 - `CREDS_KEY`, `CREDS_IV` (see `.env.example` for generation commands)
 - Any model-provider keys you plan to use
 
-OpenInsight-specific variables (DMP, AUTO_SSO, WATERMARK, SANDPACK, CSP, PI, …) are
+ARP-specific variables (DMP, AUTO_SSO, WATERMARK, SANDPACK, CSP, PI, …) are
 documented in the **OpenInsight Extensions** section at the bottom of `.env.example`.
 
 ### 2. Configure endpoints (optional)
@@ -93,8 +124,7 @@ cp librechat.example.yaml librechat.yaml
 ```
 
 Edit `librechat.yaml` to define custom endpoints, MCP servers, and interface options.
-See `librechat.example.yaml` and the
-[LibreChat yaml docs](https://www.librechat.ai/docs/configuration/librechat_yaml).
+See `librechat.example.yaml` for all available settings.
 
 ### 3. Install & run
 
@@ -135,24 +165,40 @@ Monorepo layout: `/api` (legacy JS backend), `/packages/api` (new TS backend),
 
 ---
 
-## Contributing
+## Roadmap
 
-Contributions, bug reports, and feature requests are welcome — please open an issue
-first to discuss any non-trivial change. See
-[`CONTRIBUTING.md`](.github/CONTRIBUTING.md) and
-[`SECURITY.md`](.github/SECURITY.md) for policies.
+- **v1.0** — first public release, production-ready deployment via
+  [openinsight](https://github.com/OpenInsightHQ/openinsight)
+- Deeper ONE-PI integration — expert agents, skills, orchestration
+- More enterprise connectors and identity providers
+- Community agent & MCP templates
 
 ---
 
-## Acknowledgements
+## Contributing
 
-OpenInsight would not exist without the outstanding work of
-**[Danny Avila](https://github.com/danny-avila)** and the
-**[LibreChat](https://github.com/danny-avila/LibreChat)** contributors. This project
-forks and extends LibreChat under the terms of the MIT license.
+Bug reports, feature ideas, and pull requests are welcome!
+
+- 🐛 [Report a bug](https://github.com/OpenInsightHQ/arp/issues/new?template=bug_report.md) · 💡 [Suggest a feature](https://github.com/OpenInsightHQ/arp/issues/new?template=feature_request.md)
+- Setup & guidelines: [CONTRIBUTING.md](CONTRIBUTING.md)
+- Security vulnerabilities: see [SECURITY.md](SECURITY.md) — please do not open public issues
+
+---
+
+## Built on LibreChat
+
+> ℹ️ Technical note: ARP is built on a fork of
+> [LibreChat](https://github.com/danny-avila/LibreChat). Upstream features and
+> general usage are inherited from it.
+
+ARP would not exist without the outstanding work of
+**[Danny Avila](https://github.com/danny-avila)** and the LibreChat contributors.
 
 ---
 
 ## License
 
-Released under the [MIT License](LICENSE).
+Released under the [Apache-2.0 License](LICENSE).
+
+> Portions of this project derive from [LibreChat](https://github.com/danny-avila/LibreChat)
+> (MIT, © 2023 Danny Avila and LibreChat contributors).

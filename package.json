@@ -100,7 +100,7 @@
     "url": "git+https://github.com/OpenInsightHQ/arp.git"
   },
   "author": "Shanghai Qingsan / OpenInsight Team",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "bugs": {
     "url": "https://github.com/OpenInsightHQ/arp/issues"
   },
