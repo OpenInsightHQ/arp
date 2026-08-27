@@ -505,8 +505,16 @@ class AgentClient extends BaseClient {
       }));
     }
 
-    for (let i = 0; i < messages.length; i++) {
-      this.indexTokenCountMap[i] = messages[i].tokenCount;
+    // Key the token-count map by the payload actually sent to the graph.
+    // handleContextStrategy prunes oldest messages from the payload while
+    // `messages` keeps the full history; keying by the full array misaligns
+    // indexes, so a kept message would read a pruned message's cached count
+    // at its position (e.g. after front-trimming, the last user message
+    // inherits the first pruned message's tokenCount).
+    const payloadAlignedMessages =
+      payload != null ? messages.slice(messages.length - payload.length) : messages;
+    for (let i = 0; i < payloadAlignedMessages.length; i++) {
+      this.indexTokenCountMap[i] = payloadAlignedMessages[i].tokenCount;
     }
 
     const result = {

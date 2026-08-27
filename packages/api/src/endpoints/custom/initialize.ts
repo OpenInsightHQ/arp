@@ -159,6 +159,19 @@ export async function initializeCustom({
     ...customOptions,
   };
 
+  // Lift client-side budget fields out of addParams so they never reach the model API;
+  // they are surfaced on llmConfig below for the agents flow (context pruning budget).
+  const {
+    maxContextTokens: budgetContextTokens,
+    maxOutputTokens: budgetOutputTokens,
+    ...llmAddParams
+  } = (clientOptions.addParams ?? {}) as {
+    maxContextTokens?: number;
+    maxOutputTokens?: number;
+    [key: string]: unknown;
+  };
+  clientOptions.addParams = Object.keys(llmAddParams).length > 0 ? llmAddParams : undefined;
+
   const modelOptions = { ...(model_parameters ?? {}), user: userId };
 
   const bodyMessageId = req.body?.messageId as string | undefined;
@@ -194,6 +207,16 @@ export async function initializeCustom({
   if (options != null) {
     (options as InitializeResultBase).useLegacyContent = true;
     (options as InitializeResultBase).endpointTokenConfig = endpointTokenConfig;
+    if (options.llmConfig != null) {
+      if (budgetContextTokens != null) {
+        (options.llmConfig as unknown as Record<string, unknown>).maxContextTokens =
+          budgetContextTokens;
+      }
+      if (budgetOutputTokens != null) {
+        (options.llmConfig as unknown as Record<string, unknown>).maxOutputTokens =
+          budgetOutputTokens;
+      }
+    }
   }
 
   const streamRate = clientOptions.streamRate as number | undefined;

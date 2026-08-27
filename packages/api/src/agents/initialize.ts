@@ -204,9 +204,12 @@ export async function initializeAgent(
     ),
   );
 
-  const { resendFiles, maxContextTokens, toolCallVisible, modelOptions } = extractLibreChatParams(
-    _modelOptions as Record<string, unknown>,
-  );
+  const {
+    resendFiles,
+    maxContextTokens: requestMaxContextTokens,
+    toolCallVisible,
+    modelOptions,
+  } = extractLibreChatParams(_modelOptions as Record<string, unknown>);
 
   const provider = agent.provider;
   agent.endpoint = provider;
@@ -397,7 +400,8 @@ export async function initializeAgent(
     0,
   );
   const agentMaxContextTokens = optionalChainWithEmptyCheck(
-    maxContextTokens,
+    requestMaxContextTokens,
+    llmConfig?.maxContextTokens as number | undefined,
     getModelMaxTokens(
       tokensModel ?? '',
       providerEndpointMap[provider as keyof typeof providerEndpointMap],
@@ -580,6 +584,13 @@ export async function initializeAgent(
 
   const agentMaxContextNum = Number(agentMaxContextTokens) || 34000;
   const maxOutputTokensNum = Number(maxOutputTokens) || 0;
+  const llmConfigMaxContextTokens = llmConfig?.maxContextTokens as number | undefined;
+  const resolvedMaxContextTokens =
+    requestMaxContextTokens != null && requestMaxContextTokens > 0
+      ? requestMaxContextTokens
+      : llmConfigMaxContextTokens != null && llmConfigMaxContextTokens > 0
+        ? llmConfigMaxContextTokens
+        : Math.round((agentMaxContextNum - maxOutputTokensNum) * 0.9);
 
   const finalAttachments: IMongoFile[] = (primedAttachments ?? [])
     .filter((a): a is TFile => a != null)
@@ -597,10 +608,7 @@ export async function initializeAgent(
     toolContextMap: toolContextMap ?? {},
     useLegacyContent: !!options.useLegacyContent,
     tools: (tools ?? []) as GenericTool[] & string[],
-    maxContextTokens:
-      maxContextTokens != null && maxContextTokens > 0
-        ? maxContextTokens
-        : Math.round((agentMaxContextNum - maxOutputTokensNum) * 0.9),
+    maxContextTokens: resolvedMaxContextTokens,
     toolCallVisible: toolCallVisible === true,
   };
 
