@@ -1,15 +1,17 @@
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
-const { requireJwtAuth } = require('../middleware/');
+const { SystemRoles } = require('librechat-data-provider');
+const { requireJwtAuth, requireJwtOrApiKey } = require('../middleware/');
 const { piChatCompletionsController, PI_HOST, PI_API_KEY } = require('~/server/controllers/pi/chatCompletions');
 const { getLangFromReq, getPiSystemPrompt } = require('@librechat/api');
 const { safeHttpStatus, sanitizeForLog } = require('~/server/utils/sanitize');
+const { searchConversation } = require('~/models/Conversation');
 
 const PI_UPLOAD_LIMIT_MB = parseInt(process.env.PI_UPLOAD_LIMIT_MB || '1024', 10);
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: PI_UPLOAD_LIMIT_MB * 1024 * 1024 } });
 
-async function forwardPIRequest(req, res, endpoint) {
+async function forwardPIRequest(req, res, endpoint, options = {}) {
   const query = req.query;
   const body = req.body || {};
   const agentId = query.agentId || body.agentId;
@@ -38,7 +40,7 @@ async function forwardPIRequest(req, res, endpoint) {
   try {
     const headers = {
       'api-key': PI_API_KEY,
-      'X-User-Id': req.user.id,
+      'X-User-Id': options.forwardUserId || req.user.id,
     };
 
     let reqBody;
@@ -178,8 +180,54 @@ router.get('/files', requireJwtAuth, async (req, res) => {
   return forwardPIRequest(req, res, '/files');
 });
 
-router.get('/files/download', requireJwtAuth, async (req, res) => {
-  return forwardPIRequest(req, res, '/files/download');
+/**
+ * GET /files/download
+ *
+ * Accepts JWT (frontend) or Agent API key (`Bearer sk-...`) auth, like the
+ * v2 API. PI scopes session files under the owning user's workspace, and the
+ * PI sessionId equals the LibreChat conversationId, so API-key downloads
+ * resolve the owner from the conversation record:
+ *   - ADMIN API key: no user validation — downloads any user's session file
+ *     (falls back to the X-User-Id header when no conversation record exists)
+ *   - Non-admin API key: the session must belong to the API key's user
+ */
+router.get('/files/download', requireJwtOrApiKey, async (req, res) => {
+  if (!req.apiKeyId) {
+    return forwardPIRequest(req, res, '/files/download');
+  }
+
+  const sessionId = req.query.sessionId;
+  if (!sessionId) {
+    return res.status(400).json({ error: 'agentId and sessionId are required' });
+  }
+
+  let conversation;
+  try {
+    conversation = await searchConversation(String(sessionId));
+  } catch (error) {
+    console.error('[PI Route] Download owner lookup failed:', error.message);
+    return res.status(500).json({ error: 'Failed to resolve session owner' });
+  }
+
+  const isAdmin = req.user.role === SystemRoles.ADMIN;
+  const ownerUserId = conversation ? String(conversation.user) : undefined;
+
+  if (!conversation) {
+    if (!isAdmin) {
+      return res.status(404).json({ error: `Session not found: ${sessionId}` });
+    }
+    const headerUserId = req.headers['x-user-id'];
+    if (!headerUserId || typeof headerUserId !== 'string') {
+      return res.status(404).json({ error: `Session not found: ${sessionId}` });
+    }
+    return forwardPIRequest(req, res, '/files/download', { forwardUserId: headerUserId });
+  }
+
+  if (!isAdmin && ownerUserId !== req.user.id) {
+    return res.status(403).json({ error: 'You do not have access to this session' });
+  }
+
+  return forwardPIRequest(req, res, '/files/download', { forwardUserId: ownerUserId });
 });
 
 router.delete('/files', requireJwtAuth, async (req, res) => {
