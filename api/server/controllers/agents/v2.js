@@ -9,7 +9,7 @@ const {
   createContentAggregator,
   GraphEvents,
 } = require('@librechat/agents');
-const { ContentTypes, EModelEndpoint } = require('librechat-data-provider');
+const { EModelEndpoint, VisionModes } = require('librechat-data-provider');
 const {
   writeSSE,
   createRun,
@@ -65,6 +65,10 @@ const {
 const db = require('~/models');
 const { sanitizeReflectedFields, sendJsonResponse } = require('~/server/utils/sanitize');
 const { runPIChatWithPersistence } = require('./piPersistence');
+const { isPIConfigured, listPiFiles } = require('~/server/services/PIService');
+const { appendPiFileLinks } = require('~/server/services/PiFileFooter');
+const { encodeAndFormat } = require('~/server/services/Files/images/encode');
+const { getThreadMessages, convertHistoryMessage } = require('./v2History');
 
 const DMP_HOST = process.env.DMP_HOST || '';
 const DMP_API_KEY = process.env.DMP_API_KEY || '';
@@ -158,62 +162,86 @@ function sendErrorResponse(res, statusCode, message, type = 'invalid_request_err
   res.status(statusCode).json(createErrorResponse(message, type, code));
 }
 
-async function loadConversationMessages(conversationId, userSn) {
+/**
+ * Encode thread user messages' image attachments into OpenAI image_url parts.
+ * All file docs are fetched in ONE query; per-message encoding failures
+ * degrade to text-only history.
+ * @param {ServerRequest} req
+ * @param {TMessage[]} threadMessages
+ * @param {string} provider
+ * @returns {Promise<Map<string, object[]>>} messageId → image_url parts
+ */
+async function loadHistoryImages(req, threadMessages, provider) {
+  const userMessagesWithFiles = threadMessages.filter(
+    (msg) => msg.isCreatedByUser && Array.isArray(msg.files) && msg.files.length > 0,
+  );
+  if (userMessagesWithFiles.length === 0) {
+    return new Map();
+  }
+
+  let files;
+  try {
+    const fileIds = userMessagesWithFiles.flatMap((msg) =>
+      msg.files.map((file) => file?.file_id).filter(Boolean),
+    );
+    files = fileIds.length > 0 ? ((await db.getFiles({ file_id: { $in: fileIds } })) ?? []) : [];
+  } catch (error) {
+    logger.warn('[V2 API] Failed to load history files:', error?.message);
+    return new Map();
+  }
+
+  const fileById = new Map(files.map((file) => [file.file_id, file]));
+  const imageUrlsByMessage = new Map();
+  for (const msg of userMessagesWithFiles) {
+    const imageFiles = msg.files
+      .map((file) => fileById.get(file?.file_id))
+      .filter((file) => file && String(file.type ?? '').startsWith('image/'));
+    if (imageFiles.length === 0) {
+      continue;
+    }
+    try {
+      const { image_urls } = await encodeAndFormat(
+        req,
+        imageFiles,
+        { provider },
+        VisionModes.agents,
+      );
+      if (image_urls.length > 0) {
+        imageUrlsByMessage.set(msg.messageId, image_urls);
+      }
+    } catch (error) {
+      logger.warn(`[V2 API] Failed to encode history images for ${msg.messageId}:`, error?.message);
+    }
+  }
+  return imageUrlsByMessage;
+}
+
+/**
+ * Load the conversation thread ending at `parentMessageId` (parent-chain
+ * traversal, branch-safe) as OpenAI-format messages with image attachments.
+ */
+async function loadConversationMessages(
+  req,
+  conversationId,
+  userSn,
+  parentMessageId,
+  provider,
+  { includeImages = true } = {},
+) {
   const messages = await db.getMessages({ conversationId, user: userSn });
   if (!messages || messages.length === 0) {
     return [];
   }
-  return messages.flatMap((msg) => {
-    const role = msg.isCreatedByUser ? 'user' : 'assistant';
-    if (role === 'user') {
-      return [{ role, content: msg.text ?? '' }];
-    }
-    if (Array.isArray(msg.content) && msg.content.length > 0) {
-      const assistantParts = msg.content
-        .filter((part) => part != null)
-        .filter((part) => part.type === ContentTypes.THINK || part.type === ContentTypes.TEXT);
-      const toolCallParts = msg.content
-        .filter((part) => part != null)
-        .filter((part) => part.type === ContentTypes.TOOL_CALL && part.tool_call);
-      const textContent = assistantParts
-        .map((part) => {
-          if (part.type === ContentTypes.TEXT) return part.text ?? '';
-          if (part.type === ContentTypes.THINK) return part.think ?? '';
-          return '';
-        })
-        .filter(Boolean)
-        .join('');
-      if (toolCallParts.length === 0) {
-        return [{ role, content: textContent || (msg.text ?? '') }];
-      }
-      const toolCalls = toolCallParts.map((part) => {
-        const tc = part.tool_call;
-        return {
-          id: tc.id ?? '',
-          type: 'function',
-          function: {
-            name: tc.name ?? '',
-            arguments: typeof tc.args === 'string' ? tc.args : JSON.stringify(tc.args ?? {}),
-          },
-        };
-      });
-      const assistantMessage = {
-        role,
-        content: textContent || null,
-        tool_calls: toolCalls,
-      };
-      const toolMessages = toolCallParts.map((part) => {
-        const tc = part.tool_call;
-        return {
-          role: 'tool',
-          tool_call_id: tc.id ?? '',
-          content: typeof tc.output === 'string' ? tc.output : JSON.stringify(tc.output ?? ''),
-        };
-      });
-      return [assistantMessage, ...toolMessages];
-    }
-    return [{ role, content: msg.text ?? '' }];
-  });
+  const threadMessages = getThreadMessages(messages, parentMessageId);
+  if (threadMessages.length === 0) {
+    return [];
+  }
+  const imageUrlsByMessage = includeImages
+    ? await loadHistoryImages(req, threadMessages, provider)
+    : new Map();
+  return threadMessages.flatMap((msg) =>
+    convertHistoryMessage(msg, imageUrlsByMessage.get(msg.messageId)),
+  );
 }
 
 async function getLastMessageId(conversationId, userSn) {
@@ -374,6 +402,22 @@ const V2ChatCompletionController = async (req, res) => {
       model_parameters: agent.model_parameters ?? {},
     };
 
+    /**
+     * PI workspace attachments: fetch the conversation's PI workspace
+     * inventory once via the canonical listPiFiles (same as the frontend
+     * agent flow); initializeAgent turns it into the <attachments> prompt
+     * section and mounts read_text_file. Keyed by the API-key owner id —
+     * the same id PI tool execution uses on this path.
+     */
+    let piAttachmentFiles;
+    if (isPIConfigured(req) && conversationId) {
+      piAttachmentFiles = await listPiFiles(agent.id, conversationId, req.user?.id);
+    }
+
+    // PI-side persistence key: pi mounts its subtree under the in-flight
+    // response message id (no generation job on this path)
+    req._piResponseMessageId = responseMessageId;
+
     const primaryConfig = await initializeAgent(
       {
         req,
@@ -386,6 +430,7 @@ const V2ChatCompletionController = async (req, res) => {
         endpointOption,
         allowedProviders,
         isInitialAgent: true,
+        piAttachmentFiles,
       },
       {
         getConvoFiles,
@@ -399,6 +444,20 @@ const V2ChatCompletionController = async (req, res) => {
         getCodeGeneratedFiles: db.getCodeGeneratedFiles,
       },
     );
+
+    /**
+     * Stash the primary agent's final system prompt (instructions +
+     * additional_instructions as mutated by initializeAgent with
+     * <attachments>/<available_skills>/<available_prompts>) so execute_skill
+     * forwards the agent's EXACT prompt to pi (no generation job on this path).
+     */
+    const piAgentSystemPrompt = [agent.instructions, agent.additional_instructions]
+      .filter(Boolean)
+      .join('\n\n')
+      .trim();
+    if (piAgentSystemPrompt) {
+      req._piAgentSystemPrompt = piAgentSystemPrompt;
+    }
 
     const streamingDisabled = !!primaryConfig.model_parameters?.disableStreaming;
     const isStreaming = request.stream === true && !streamingDisabled;
@@ -457,7 +516,13 @@ const V2ChatCompletionController = async (req, res) => {
     let openaiMessages = convertMessages(request.messages);
 
     if (!isNewConversation) {
-      const historyMessages = await loadConversationMessages(conversationId, userSn);
+      const historyMessages = await loadConversationMessages(
+        req,
+        conversationId,
+        userSn,
+        parentMessageId,
+        agent.provider,
+      );
       if (historyMessages.length > 0) {
         openaiMessages = [...historyMessages, ...openaiMessages];
       }
@@ -792,6 +857,11 @@ const V2ChatCompletionController = async (req, res) => {
     const responseContent = healed.content.length > 0 ? healed.content : undefined;
     const healedResponseText = healed.text ?? '';
 
+    // Append the pi file-links footer (execute_skill / execute_code outputs)
+    // to the response BEFORE persisting, mirroring the frontend agent flow.
+    const piFooterResponse = { text: healedResponseText, content: responseContent };
+    const piFooter = await appendPiFileLinks(req, piFooterResponse);
+
     const userMessageText = extractTextFromMessages(request.messages);
 
     const fakeReq = { user: { id: userSn }, config: appConfig };
@@ -814,10 +884,10 @@ const V2ChatCompletionController = async (req, res) => {
     }
 
     const successFinishReason = getSuccessFinishReason({
-      hasToolCalls: contentPartsContainToolCall(responseContent),
+      hasToolCalls: contentPartsContainToolCall(piFooterResponse.content),
     });
 
-    if (fullResponseText || fullReasoningText || responseContent) {
+    if (piFooterResponse.text || fullReasoningText || piFooterResponse.content) {
       const streamLogValue = streamLogCollector ? streamLogCollector.getLog() : undefined;
       logger.debug(
         `[V2 API] streamLog: collector=${!!streamLogCollector}, length=${streamLogValue?.length ?? 0}`,
@@ -828,8 +898,8 @@ const V2ChatCompletionController = async (req, res) => {
           messageId: responseMessageId,
           conversationId,
           parentMessageId: userMessageId,
-          text: healedResponseText,
-          content: responseContent,
+          text: piFooterResponse.text,
+          content: piFooterResponse.content,
           sender: 'AI',
           isCreatedByUser: false,
           endpoint: EModelEndpoint.agents,
@@ -859,6 +929,9 @@ const V2ChatCompletionController = async (req, res) => {
 
     const duration = Date.now() - requestStartTime;
     if (isStreaming) {
+      if (piFooter) {
+        writeSSE(res, createChunk(context, { content: piFooter }));
+      }
       sendFinalChunk(handlerConfig);
       res.end();
       logger.debug(`[V2 API] Request ${responseMessageId} completed in ${duration}ms (streaming)`);
@@ -891,7 +964,9 @@ const V2ChatCompletionController = async (req, res) => {
 
       const response = buildNonStreamingResponse(
         context,
-        normalizeArtifactStream(aggregator.getText()),
+        piFooter
+          ? normalizeArtifactStream(aggregator.getText()) + piFooter
+          : normalizeArtifactStream(aggregator.getText()),
         aggregator.getReasoning(),
         aggregator.toolCalls,
         usage,
@@ -993,7 +1068,14 @@ const V2ChatCompletionController = async (req, res) => {
       let lastSevenMessages = [];
       let recentMessagesText = '';
       try {
-        const historyMessages = await loadConversationMessages(conversationId, userSn);
+        const historyMessages = await loadConversationMessages(
+          req,
+          conversationId,
+          userSn,
+          parentMessageId,
+          agent.provider,
+          { includeImages: false },
+        );
         lastSevenMessages = historyMessages.slice(-7);
         recentMessagesText = lastSevenMessages
           .map((msg, idx) => {

@@ -61,6 +61,8 @@ const db = require('~/models');
 const { sanitizeReflectedFields, sendJsonResponse } = require('~/server/utils/sanitize');
 const { v4: uuidv4 } = require('uuid');
 const { runPIChatWithPersistence } = require('./piPersistence');
+const { isPIConfigured, listPiFiles } = require('~/server/services/PIService');
+const { appendPiFileLinks } = require('~/server/services/PiFileFooter');
 
 /**
  * Creates a tool loader function for the agent.
@@ -203,6 +205,7 @@ const OpenAIChatCompletionController = async (req, res) => {
   }
 
   // Generate IDs
+  const userMessageId = `user-${nanoid()}`;
   const requestId = `chatcmpl-${nanoid()}`;
   const conversationId = request.conversation_id ?? nanoid();
   const parentMessageId = request.parent_message_id ?? null;
@@ -255,6 +258,21 @@ const OpenAIChatCompletionController = async (req, res) => {
       model_parameters: agent.model_parameters ?? {},
     };
 
+    /**
+     * PI workspace attachments: reuse PIService's canonical listPiFiles to
+     * fetch the conversation's PI workspace inventory once (same as the
+     * frontend agent flow); initializeAgent turns it into the <attachments>
+     * prompt section and mounts read_text_file.
+     */
+    let piAttachmentFiles;
+    if (isPIConfigured(req) && conversationId) {
+      piAttachmentFiles = await listPiFiles(agent.id, conversationId, req.user?.id);
+    }
+
+    // PI-side persistence key: pi mounts its subtree under the in-flight
+    // response message id (no generation job on this path)
+    req._piResponseMessageId = requestId;
+
     const primaryConfig = await initializeAgent(
       {
         req,
@@ -267,6 +285,7 @@ const OpenAIChatCompletionController = async (req, res) => {
         endpointOption,
         allowedProviders,
         isInitialAgent: true,
+        piAttachmentFiles,
       },
       {
         getConvoFiles,
@@ -280,6 +299,20 @@ const OpenAIChatCompletionController = async (req, res) => {
         getCodeGeneratedFiles: db.getCodeGeneratedFiles,
       },
     );
+
+    /**
+     * Stash the primary agent's final system prompt (instructions +
+     * additional_instructions as mutated by initializeAgent with
+     * <attachments>/<available_skills>/<available_prompts>) so execute_skill
+     * forwards the agent's EXACT prompt to pi (no generation job on this path).
+     */
+    const piAgentSystemPrompt = [agent.instructions, agent.additional_instructions]
+      .filter(Boolean)
+      .join('\n\n')
+      .trim();
+    if (piAgentSystemPrompt) {
+      req._piAgentSystemPrompt = piAgentSystemPrompt;
+    }
 
     // Determine if streaming is enabled (check both request and agent config)
     const streamingDisabled = !!primaryConfig.model_parameters?.disableStreaming;
@@ -614,6 +647,18 @@ const OpenAIChatCompletionController = async (req, res) => {
     });
     const responseContent = healed.content.length > 0 ? healed.content : undefined;
 
+    let fullResponseText = '';
+    for (const part of healed.content) {
+      if (part.type === 'text' && typeof part.text === 'string') {
+        fullResponseText += part.text;
+      }
+    }
+
+    // Append the pi file-links footer (execute_skill / execute_code outputs)
+    // to the response BEFORE persisting, mirroring the frontend agent flow.
+    const piFooterResponse = { text: fullResponseText, content: responseContent };
+    const piFooter = await appendPiFileLinks(req, piFooterResponse);
+
     const userMessageText = extractTextFromMessages(request.messages);
     const fakeReq = { user: { id: userId }, config: appConfig };
 
@@ -621,7 +666,7 @@ const OpenAIChatCompletionController = async (req, res) => {
       await db.saveMessage(
         fakeReq,
         {
-          messageId: requestId,
+          messageId: userMessageId,
           conversationId,
           parentMessageId,
           text: userMessageText,
@@ -634,26 +679,19 @@ const OpenAIChatCompletionController = async (req, res) => {
       );
     }
 
-    let fullResponseText = '';
-    for (const part of healed.content) {
-      if (part.type === 'text' && typeof part.text === 'string') {
-        fullResponseText += part.text;
-      }
-    }
-
     const successFinishReason = getSuccessFinishReason({
-      hasToolCalls: contentPartsContainToolCall(responseContent),
+      hasToolCalls: contentPartsContainToolCall(piFooterResponse.content),
     });
 
-    if (fullResponseText || responseContent) {
+    if (piFooterResponse.text || piFooterResponse.content) {
       await db.saveMessage(
         fakeReq,
         {
           messageId: requestId,
           conversationId,
-          parentMessageId,
-          text: fullResponseText || '',
-          content: responseContent,
+          parentMessageId: userMessageId,
+          text: piFooterResponse.text || '',
+          content: piFooterResponse.content,
           sender: 'AI',
           isCreatedByUser: false,
           endpoint: EModelEndpoint.agents,
@@ -700,6 +738,9 @@ const OpenAIChatCompletionController = async (req, res) => {
     // Finalize response
     const duration = Date.now() - requestStartTime;
     if (isStreaming) {
+      if (piFooter) {
+        writeSSE(res, createChunk(context, { content: piFooter }));
+      }
       sendFinalChunk(handlerConfig);
       res.end();
       logger.debug(`[OpenAI API] Request ${requestId} completed in ${duration}ms (streaming)`);
@@ -735,7 +776,9 @@ const OpenAIChatCompletionController = async (req, res) => {
 
       const response = buildNonStreamingResponse(
         context,
-        normalizeArtifactStream(aggregator.getText()),
+        piFooter
+          ? normalizeArtifactStream(aggregator.getText()) + piFooter
+          : normalizeArtifactStream(aggregator.getText()),
         aggregator.getReasoning(),
         aggregator.toolCalls,
         usage,
@@ -750,6 +793,28 @@ const OpenAIChatCompletionController = async (req, res) => {
 
     const errorFinishReason = getErrorFinishReason(error);
     const partialReq = { user: { id: req.user?.id ?? 'api-user' }, config: appConfig };
+
+    // Persist the user message so the error placeholder stays chained
+    // (mirrors the v2 controller's error path).
+    const errorUserMessageText = extractTextFromMessages(request.messages);
+    if (errorUserMessageText) {
+      db.saveMessage(
+        partialReq,
+        {
+          messageId: userMessageId,
+          conversationId,
+          parentMessageId,
+          text: errorUserMessageText,
+          sender: 'user',
+          isCreatedByUser: true,
+          endpoint: EModelEndpoint.agents,
+          model: agentId,
+        },
+        { context: 'api/server/controllers/agents/openai.js - user message on error' },
+      ).catch((saveErr) =>
+        logger.warn('[OpenAI API] Error saving user message on error:', saveErr),
+      );
+    }
 
     // Always persist a placeholder assistant message so the failure reason is
     // recorded even when stream logging is disabled. When a stream log was
@@ -779,7 +844,7 @@ const OpenAIChatCompletionController = async (req, res) => {
       {
         messageId: requestId,
         conversationId,
-        parentMessageId,
+        parentMessageId: userMessageId,
         text: errorText,
         content: errorContent,
         sender: 'AI',

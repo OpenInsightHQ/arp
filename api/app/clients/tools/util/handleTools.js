@@ -103,12 +103,13 @@ const createPITools = (options = {}) => {
    * Resolve the current message-tree leaf for pi-side persistence.
    * At tool-execution time the outer agent's reply for this turn is not yet
    * saved, so pi must mount its messages under the in-flight responseMessageId
-   * (stored in the generation job metadata by onStart) instead of guessing
-   * "last message" — otherwise the pi subtree forks the message tree.
+   * instead of guessing "last message" — otherwise the pi subtree forks the
+   * message tree. Resumable flows read it from the generation job; non-job
+   * flows (OpenAI-compat v1/v2 controllers) stash it on the request.
    */
   const resolveParentMessageId = async () => {
     if (!streamId) {
-      return undefined;
+      return req?._piResponseMessageId || undefined;
     }
     try {
       const job = await GenerationJobManager.getJob(streamId);
@@ -121,12 +122,13 @@ const createPITools = (options = {}) => {
 
   /**
    * Resolve the outer agent's exact system prompt (stashed on the generation
-   * job at sendMessage time). execute_skill forwards it to pi's
-   * /execute-agent-skill so the skill runs under the agent's verbatim prompt.
+   * job at sendMessage time, or on the request by non-job controllers).
+   * execute_skill forwards it to pi's /execute-agent-skill so the skill runs
+   * under the agent's verbatim prompt.
    */
   const resolveAgentSystemPrompt = async () => {
     if (!streamId) {
-      return undefined;
+      return req?._piAgentSystemPrompt || undefined;
     }
     try {
       const job = await GenerationJobManager.getJob(streamId);
