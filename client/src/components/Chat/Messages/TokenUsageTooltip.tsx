@@ -12,6 +12,10 @@ type TokenUsageTooltipProps = Pick<
   | 'cacheWriteTokens'
   | 'inputTokens'
   | 'outputTokens'
+  | 'totalInputTokens'
+  | 'totalOutputTokens'
+  | 'totalCacheReadTokens'
+  | 'totalCacheWriteTokens'
 >;
 
 export default function TokenUsageTooltip({
@@ -21,6 +25,10 @@ export default function TokenUsageTooltip({
   cacheWriteTokens,
   inputTokens,
   outputTokens,
+  totalInputTokens,
+  totalOutputTokens,
+  totalCacheReadTokens,
+  totalCacheWriteTokens,
 }: TokenUsageTooltipProps) {
   const localize = useLocalize();
   const input = Math.max(0, inputTokenCount ?? 0);
@@ -29,7 +37,18 @@ export default function TokenUsageTooltip({
   const cacheRead = Math.max(0, cacheReadTokens ?? 0);
   const cacheWrite = Math.max(0, cacheWriteTokens ?? 0);
   const cacheMiss = Math.max(0, input - cacheRead - cacheWrite);
-  const cacheHitRate = input > 0 ? (cacheRead / input) * 100 : 0;
+
+  /* Turn-cumulative usage (shared caliber with the pi backend) */
+  const hasTurnTotals =
+    totalInputTokens != null ||
+    totalOutputTokens != null ||
+    totalCacheReadTokens != null ||
+    totalCacheWriteTokens != null;
+  const turnInput = Math.max(0, totalInputTokens ?? 0);
+  const turnOutput = Math.max(0, totalOutputTokens ?? 0);
+  const turnCacheRead = Math.max(0, totalCacheReadTokens ?? 0);
+  const turnCacheWrite = Math.max(0, totalCacheWriteTokens ?? 0);
+  const turnTotal = turnInput + turnOutput + turnCacheRead + turnCacheWrite;
 
   /* Latest model call usage */
   const hasLastCall = inputTokens != null || outputTokens != null;
@@ -68,10 +87,33 @@ export default function TokenUsageTooltip({
           <span className={valueClassName}>{formatTokens(output)}</span>
         </div>
       </div>
-      <div className={`${rowClassName} border-t border-border-medium pt-2`}>
-        <span className="min-w-0">{localize('com_ui_token_cache_hit_rate')}</span>
-        <span className={valueClassName}>{cacheHitRate.toFixed(1)}%</span>
-      </div>
+      {hasTurnTotals && (
+        <div className="space-y-1.5">
+          <div className={sectionTitle}>{localize('com_ui_token_turn_totals')}</div>
+          <div className={rowClassName}>
+            <span className="min-w-0">{localize('com_ui_token_input_excl_cache')}</span>
+            <span className={valueClassName}>{formatTokens(turnInput)}</span>
+          </div>
+          <div className="space-y-1 pl-3 text-text-secondary">
+            <div className={rowClassName}>
+              <span className="min-w-0">{localize('com_ui_token_cache_hit')}</span>
+              <span className={valueClassName}>{formatTokens(turnCacheRead)}</span>
+            </div>
+            <div className={rowClassName}>
+              <span className="min-w-0">{localize('com_ui_token_cache_write')}</span>
+              <span className={valueClassName}>{formatTokens(turnCacheWrite)}</span>
+            </div>
+          </div>
+          <div className={rowClassName}>
+            <span className="min-w-0">{localize('com_ui_token_output')}</span>
+            <span className={valueClassName}>{formatTokens(turnOutput)}</span>
+          </div>
+          <div className={`${rowClassName} border-t border-border-medium pt-2`}>
+            <span className="min-w-0">{localize('com_ui_token_sum')}</span>
+            <span className={valueClassName}>{formatTokens(turnTotal)}</span>
+          </div>
+        </div>
+      )}
       {hasLastCall && (
         <div className="space-y-1.5">
           <div className={sectionTitle}>{localize('com_ui_token_last_call')}</div>
