@@ -218,7 +218,7 @@ arp and pi (repo: `pi-agent-github`) write the same token usage fields on assist
 
 Shared fields (assistant message documents):
 
-- Per-call usage — describes one actual model call (the latest call behind the document): `inputTokens` (provider-reported non-cached input), `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`. Cache tokens are recorded separately and never folded into `inputTokens`.
+- Per-call usage — describes one actual model call (the turn's FIRST call — pairs with `inputTokenCount` so In ≥ cache-hit always holds in display): `inputTokens` (fresh non-cached input), `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`. Cache tokens are recorded separately and never folded into `inputTokens`.
 - Turn-cumulative usage — sums over every model call of the turn: `totalInputTokens`, `totalOutputTokens`, `totalCacheReadTokens`, `totalCacheWriteTokens`. Session-cumulative `total*` live on the `conversations` record (both pi and arp native flows maintain them).
 
 Writers:

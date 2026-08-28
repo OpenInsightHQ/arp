@@ -601,7 +601,7 @@ describe('AgentClient - recordCollectedUsage', () => {
 
       // input_tokens already includes cache → summary keeps it as the full prompt
       expect(client.usage.input_tokens).toBe(100);
-      // Fresh input per call: 100 - 20 - 10
+      // Fresh input of the first call: 100 - 20 - 10
       expect(client.usage.inputTokens).toBe(70);
       expect(client.usage.totalInputTokens).toBe(70);
     });
@@ -746,7 +746,7 @@ describe('AgentClient - recordCollectedUsage', () => {
   });
 
   describe('pi-consistent usage fields (shared caliber with the pi backend)', () => {
-    it('records per-call fields of the latest call and turn-cumulative totals', async () => {
+    it('records per-call fields of the first call and turn-cumulative totals', async () => {
       const collectedUsage = [
         {
           input_tokens: 788,
@@ -774,11 +774,11 @@ describe('AgentClient - recordCollectedUsage', () => {
         transactions: { enabled: true },
       });
 
-      // Per-call: latest entry only, cache never folded into inputTokens
-      expect(client.usage.inputTokens).toBe(26808);
-      expect(client.usage.outputTokens).toBe(225);
-      expect(client.usage.cacheReadTokens).toBe(31576);
-      expect(client.usage.cacheWriteTokens).toBe(0);
+      // Per-call: FIRST entry only, cache never folded into inputTokens
+      expect(client.usage.inputTokens).toBe(788);
+      expect(client.usage.outputTokens).toBe(163);
+      expect(client.usage.cacheReadTokens).toBe(0);
+      expect(client.usage.cacheWriteTokens).toBe(30808);
       // Totals: every call of the turn
       expect(client.usage.totalInputTokens).toBe(788 + 3802 + 26808);
       expect(client.usage.totalOutputTokens).toBe(163 + 149 + 225);

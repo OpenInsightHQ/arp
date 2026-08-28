@@ -845,7 +845,8 @@ const V2ChatCompletionController = async (req, res) => {
       : Number(firstUsage?.input_tokens) || 0;
     /*
       pi-consistent usage accounting (shared caliber with the pi backend, see AGENTS.md
-      "Token Accounting"): per-call fields describe the latest model call, total* fields
+      "Token Accounting"): per-call fields describe the turn's FIRST model call (pairing
+      with inputTokenCount so In ≥ cache-hit always holds in display), total* fields
       accumulate every call of the turn. inputTokens is the fresh (non-cached) input;
       cacheReadTokens/cacheWriteTokens are recorded separately, never folded in.
     */
@@ -853,7 +854,7 @@ const V2ChatCompletionController = async (req, res) => {
     let totalInputTokens = 0;
     let totalCacheReadTokens = 0;
     let totalCacheWriteTokens = 0;
-    let lastCallUsage;
+    let firstCallUsage;
     for (const usage of collectedUsage) {
       if (!usage) {
         continue;
@@ -873,7 +874,7 @@ const V2ChatCompletionController = async (req, res) => {
       totalInputTokens += freshInput;
       totalCacheReadTokens += cacheReadTokens;
       totalCacheWriteTokens += cacheWriteTokens;
-      lastCallUsage = {
+      firstCallUsage ??= {
         inputTokens: freshInput,
         outputTokens: Number(usage.output_tokens) || 0,
         cacheReadTokens,
@@ -945,8 +946,8 @@ const V2ChatCompletionController = async (req, res) => {
           tokenCount: totalOutputTokens,
           inputTokenCount: messageInputTokens,
           // pi-consistent usage fields: per-call (latest) + turn-cumulative totals
-          ...(lastCallUsage && {
-            ...lastCallUsage,
+          ...(firstCallUsage && {
+            ...firstCallUsage,
             totalInputTokens,
             totalOutputTokens,
             totalCacheReadTokens,
@@ -963,7 +964,7 @@ const V2ChatCompletionController = async (req, res) => {
       turn's usage onto the existing totals.
     */
     let convoUsageTotals;
-    if (lastCallUsage) {
+    if (firstCallUsage) {
       const existingConvo = await getConvo(userSn, conversationId);
       convoUsageTotals = {
         totalInputTokens: (existingConvo?.totalInputTokens ?? 0) + totalInputTokens,

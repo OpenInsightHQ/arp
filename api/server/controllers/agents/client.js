@@ -930,14 +930,15 @@ ${historyString}`;
     let total_output_tokens = 0;
     /*
       pi-consistent usage accounting (shared caliber with the pi backend, see AGENTS.md
-      "Token Accounting"): per-call fields describe the latest model call, total* fields
-      accumulate every call of the turn. inputTokens is the provider-reported non-cached
-      input; cacheReadTokens/cacheWriteTokens are recorded separately, never folded in.
+      "Token Accounting"): per-call fields describe the turn's FIRST model call (pairing
+      with inputTokenCount so In ≥ cache-hit always holds in display), total* fields
+      accumulate every call of the turn. inputTokens is the fresh (non-cached) input;
+      cacheReadTokens/cacheWriteTokens are recorded separately, never folded in.
     */
     let total_input_tokens = 0;
     let total_cache_read_tokens = 0;
     let total_cache_write_tokens = 0;
-    let lastCallUsage;
+    let firstCallUsage;
 
     for (const usage of collectedUsage) {
       if (!usage) {
@@ -962,7 +963,7 @@ ${historyString}`;
       total_input_tokens += freshInput;
       total_cache_read_tokens += cache_read;
       total_cache_write_tokens += cache_creation;
-      lastCallUsage = {
+      firstCallUsage ??= {
         inputTokens: freshInput,
         outputTokens: Number(usage.output_tokens) || 0,
         cacheReadTokens: cache_read,
@@ -1021,8 +1022,8 @@ ${historyString}`;
       input_tokens,
       output_tokens: total_output_tokens,
       ...(!isPIEndpointFlow &&
-        lastCallUsage && {
-          ...lastCallUsage,
+        firstCallUsage && {
+          ...firstCallUsage,
           totalInputTokens: total_input_tokens,
           totalOutputTokens: total_output_tokens,
           totalCacheReadTokens: total_cache_read_tokens,

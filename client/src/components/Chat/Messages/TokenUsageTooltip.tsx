@@ -50,8 +50,8 @@ export default function TokenUsageTooltip({
   const turnCacheWrite = Math.max(0, totalCacheWriteTokens ?? 0);
   const turnTotal = turnInput + turnOutput + turnCacheRead + turnCacheWrite;
 
-  /* Latest model call usage */
-  const hasLastCall = inputTokens != null || outputTokens != null;
+  /* First model call of the turn */
+  const hasFirstCall = inputTokens != null || outputTokens != null;
 
   const valueClassName = 'min-w-20 text-right font-mono tabular-nums';
   const rowClassName = 'grid grid-cols-[minmax(0,1fr)_minmax(5rem,auto)] items-center gap-4';
@@ -114,9 +114,9 @@ export default function TokenUsageTooltip({
           </div>
         </div>
       )}
-      {hasLastCall && (
+      {hasFirstCall && (
         <div className="space-y-1.5">
-          <div className={sectionTitle}>{localize('com_ui_token_last_call')}</div>
+          <div className={sectionTitle}>{localize('com_ui_token_first_call')}</div>
           <div className={rowClassName}>
             <span className="min-w-0">{localize('com_ui_token_input_excl_cache')}</span>
             <span className={valueClassName}>{formatTokens(Math.max(0, inputTokens ?? 0))}</span>
