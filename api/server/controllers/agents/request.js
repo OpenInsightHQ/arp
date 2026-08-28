@@ -12,7 +12,7 @@ const {
 const { disposeClient, clientRegistry, requestDataMap } = require('~/server/cleanup');
 const { handleAbortError } = require('~/server/middleware');
 const { logViolation } = require('~/cache');
-const { saveMessage } = require('~/models');
+const { saveMessage, getMessage } = require('~/models');
 const { appendPiLinksToSavedMessage } = require('~/server/services/PIService');
 const { appendPiFileLinks } = require('~/server/services/PiFileFooter');
 const { removeStreamLogCollector } = require('~/server/services/StreamLog');
@@ -29,6 +29,44 @@ function readStreamLog(client) {
     return undefined;
   }
   return collector.getLog();
+}
+
+/** Usage fields the pi backend persists on the same assistant message documents (shared caliber). */
+const piOwnedUsageFields = [
+  'inputTokens',
+  'outputTokens',
+  'cacheReadTokens',
+  'cacheWriteTokens',
+  'totalInputTokens',
+  'totalOutputTokens',
+  'totalCacheReadTokens',
+  'totalCacheWriteTokens',
+];
+
+/**
+ * The pi endpoint flow skips the pi-consistent usage fields when building the
+ * in-memory response (the pi backend owns them), so the FINAL event would ship
+ * the message without them until the client refetches. pi finalizes its
+ * document writes before its SSE stream ends — well before this point — so
+ * reading the message back and merging the usage fields keeps the live event
+ * identical to the persisted document.
+ * @param {string} userId
+ * @param {Partial<TMessage>} response
+ */
+async function mergePiUsageFields(userId, response) {
+  try {
+    const message = await getMessage({ user: userId, messageId: response.messageId });
+    if (!message) {
+      return;
+    }
+    for (const field of piOwnedUsageFields) {
+      if (message[field] != null) {
+        response[field] = message[field];
+      }
+    }
+  } catch (err) {
+    logger.warn('[ResumableAgentController] Failed to merge pi usage fields:', err?.message);
+  }
 }
 
 function createCloseHandler(abortController) {
@@ -324,6 +362,10 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
           appendPiLinksToSavedMessage(messageId, piFooter);
         }
 
+        if (isPIEndpoint && response.totalInputTokens == null) {
+          await mergePiUsageFields(userId, response);
+        }
+
         // Save user message BEFORE sending final event to avoid race condition
         // where client refetch happens before database is updated
         if (!client.skipSaveUserMessage && userMessage) {
@@ -528,10 +570,7 @@ const _LegacyAgentController = async (req, res, next, initializeClient, addTitle
   let cleanupHandlers = [];
 
   // Match the same logic used for conversationId generation above
-  const isNewConvo = !reqConversationId || reqConversationId === 'new';
   const userId = req.user.id;
-  // PI endpoint: messages are recorded by the PI backend, skip local saves.
-  const isPIEndpoint = String(endpointOption?.endpoint) === 'pi';
 
   // Create handler to avoid capturing the entire parent scope
   let getReqData = (data = {}) => {

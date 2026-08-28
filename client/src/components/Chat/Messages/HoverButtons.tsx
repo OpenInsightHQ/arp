@@ -7,7 +7,7 @@ import { Fork } from '~/components/Conversations';
 import MessageAudio from './MessageAudio';
 import Feedback from './Feedback';
 import TokenUsageTooltip from './TokenUsageTooltip';
-import { cn, formatDate } from '~/utils';
+import { cn } from '~/utils';
 import store from '~/store';
 
 type THoverButtons = {
@@ -185,6 +185,11 @@ const HoverButtons = ({
 
   const handleCopy = () => copyToClipboard(setIsCopied);
 
+  const hasTokenUsage =
+    (message.tokenCount ?? 0) > 0 ||
+    (message.totalInputTokens ?? 0) > 0 ||
+    (message.totalOutputTokens ?? 0) > 0;
+
   return (
     <div className="group visible flex justify-center gap-0.5 self-end focus-within:outline-none lg:justify-start">
       {/* Text to Speech */}
@@ -280,8 +285,8 @@ const HoverButtons = ({
             !isLast && 'md:opacity-0 md:group-focus-within:opacity-100 md:group-hover:opacity-100',
           )}
         >
-          {/* Token Count - 助手消息统一显示明细 Tooltip（ONE-PI 与其他 Agent 共用同一口径） */}
-          {message.tokenCount != null && message.tokenCount > 0 && (
+          {/* Token Count - 助手消息统一显示本轮累计 Tooltip（total* 口径，In/Out 与 Tooltip 一致） */}
+          {hasTokenUsage && (
             <TokenUsageTooltip
               inputTokenCount={message.inputTokenCount}
               tokenCount={message.tokenCount}
@@ -298,8 +303,8 @@ const HoverButtons = ({
 
           {/* Timestamp - 完整日期时间 */}
           {message.updatedAt && (
-            <span title="回复完成时间">
-              TIME:{' '}
+            <span title={localize('com_ui_message_completed_at')}>
+              {localize('com_ui_time_label')}{' '}
               {new Date(message.updatedAt).toLocaleString('zh-CN', {
                 year: 'numeric',
                 month: '2-digit',
