@@ -34,6 +34,7 @@ const {
   isChatCompletionValidationFailure,
   extractToolCallIds,
   extractCacheTokens,
+  inputTokensExcludeCache,
   applyCollectedUsageToContentParts,
   createTokenCounter,
   getLangFromReq,
@@ -828,24 +829,25 @@ const V2ChatCompletionController = async (req, res) => {
     timestampTracker.apply(contentParts);
     applyCollectedUsageToContentParts(contentParts, collectedUsage);
 
-    // Use the first LLM call's input_tokens as the message-level inputTokenCount,
-    // mirroring the frontend chat flow (BaseClient.js / client.js recordCollectedUsage):
-    // "Use first entry's input_tokens as the base input (represents initial user
-    // message context)". Output tokens are summed across all calls.
+    // Full prompt of the first LLM call as the message-level inputTokenCount,
+    // mirroring the frontend chat flow (client.js recordCollectedUsage).
+    // Claude-style entries report input WITHOUT cache (add it); OpenAI-style
+    // entries report prompt_tokens which ALREADY includes cache (use as-is).
     const firstUsage = collectedUsage[0];
-    const messageInputTokens =
-      (Number(firstUsage?.input_tokens) || 0) +
-      (Number(firstUsage?.input_token_details?.cache_creation) ||
-        Number(firstUsage?.cache_creation_input_tokens) ||
-        0) +
-      (Number(firstUsage?.input_token_details?.cache_read) ||
-        Number(firstUsage?.cache_read_input_tokens) ||
-        0);
+    const messageInputTokens = inputTokensExcludeCache(firstUsage)
+      ? (Number(firstUsage?.input_tokens) || 0) +
+        (Number(firstUsage?.input_token_details?.cache_creation) ||
+          Number(firstUsage?.cache_creation_input_tokens) ||
+          0) +
+        (Number(firstUsage?.input_token_details?.cache_read) ||
+          Number(firstUsage?.cache_read_input_tokens) ||
+          0)
+      : Number(firstUsage?.input_tokens) || 0;
     /*
       pi-consistent usage accounting (shared caliber with the pi backend, see AGENTS.md
       "Token Accounting"): per-call fields describe the latest model call, total* fields
-      accumulate every call of the turn. inputTokens is the provider-reported non-cached
-      input; cacheReadTokens/cacheWriteTokens are recorded separately, never folded in.
+      accumulate every call of the turn. inputTokens is the fresh (non-cached) input;
+      cacheReadTokens/cacheWriteTokens are recorded separately, never folded in.
     */
     let totalOutputTokens = 0;
     let totalInputTokens = 0;
@@ -862,12 +864,17 @@ const V2ChatCompletionController = async (req, res) => {
         0;
       const cacheReadTokens =
         Number(usage.input_token_details?.cache_read) || Number(usage.cache_read_input_tokens) || 0;
+      // Fresh input: Claude-style reports it directly; OpenAI-style input
+      // already includes cache, so subtract (clamped).
+      const freshInput = inputTokensExcludeCache(usage)
+        ? Number(usage.input_tokens) || 0
+        : Math.max(0, (Number(usage.input_tokens) || 0) - cacheWriteTokens - cacheReadTokens);
       totalOutputTokens += Number(usage.output_tokens) || 0;
-      totalInputTokens += Number(usage.input_tokens) || 0;
+      totalInputTokens += freshInput;
       totalCacheReadTokens += cacheReadTokens;
       totalCacheWriteTokens += cacheWriteTokens;
       lastCallUsage = {
-        inputTokens: Number(usage.input_tokens) || 0,
+        inputTokens: freshInput,
         outputTokens: Number(usage.output_tokens) || 0,
         cacheReadTokens,
         cacheWriteTokens,

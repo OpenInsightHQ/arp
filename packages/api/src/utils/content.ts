@@ -180,6 +180,23 @@ export function extractCacheTokens(usage: unknown): {
   };
 }
 
+/**
+ * Whether the entry's `usage_metadata.input_tokens` EXCLUDES prompt-cache tokens:
+ * - true (Anthropic / Bedrock Claude): input counts only fresh tokens, so the
+ *   full prompt = input + cacheRead + cacheCreation.
+ * - false (OpenAI-compatible providers, incl. implicit-caching models such as
+ *   DeepSeek/Qwen): input is OpenAI's `prompt_tokens`, which ALREADY includes
+ *   cached tokens — cache must NOT be added on top (double count), and the
+ *   fresh input = input − cacheRead − cacheCreation.
+ *
+ * Both provider families normalize cache into `input_token_details`, so the
+ * shape alone cannot distinguish them; detection is model-name based.
+ */
+export function inputTokensExcludeCache(usage: unknown): boolean {
+  const model = (usage as { model?: string } | null | undefined)?.model;
+  return typeof model === 'string' && /claude/i.test(model);
+}
+
 /** Token fields written onto each matching tool_call content part. */
 interface PartTokens {
   inputTokens: number;

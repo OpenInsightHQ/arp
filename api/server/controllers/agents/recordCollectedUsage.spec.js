@@ -481,6 +481,7 @@ describe('AgentClient - recordCollectedUsage', () => {
 
   describe('cache token handling', () => {
     it('should handle OpenAI format cache tokens (input_token_details)', async () => {
+      // OpenAI-style: input_tokens (prompt_tokens) ALREADY includes cached tokens
       const collectedUsage = [
         {
           input_tokens: 100,
@@ -504,7 +505,7 @@ describe('AgentClient - recordCollectedUsage', () => {
         expect.objectContaining({ model: 'gpt-4' }),
         {
           promptTokens: {
-            input: 100,
+            input: 70,
             write: 20,
             read: 10,
           },
@@ -579,7 +580,7 @@ describe('AgentClient - recordCollectedUsage', () => {
       expect(mockSpendStructuredTokens).toHaveBeenCalledTimes(1);
     });
 
-    it('should include cache tokens in total input calculation', async () => {
+    it('should NOT double count cache for OpenAI-style input_tokens (already includes cache)', async () => {
       const collectedUsage = [
         {
           input_tokens: 100,
@@ -598,7 +599,33 @@ describe('AgentClient - recordCollectedUsage', () => {
         transactions: { enabled: true },
       });
 
-      // Total input should include cache tokens: 100 + 20 + 10 = 130
+      // input_tokens already includes cache → summary keeps it as the full prompt
+      expect(client.usage.input_tokens).toBe(100);
+      // Fresh input per call: 100 - 20 - 10
+      expect(client.usage.inputTokens).toBe(70);
+      expect(client.usage.totalInputTokens).toBe(70);
+    });
+
+    it('should include cache tokens in total input calculation for Claude-style entries', async () => {
+      const collectedUsage = [
+        {
+          input_tokens: 100,
+          output_tokens: 50,
+          model: 'claude-3',
+          input_token_details: {
+            cache_creation: 20,
+            cache_read: 10,
+          },
+        },
+      ];
+
+      await client.recordCollectedUsage({
+        collectedUsage,
+        balance: { enabled: true },
+        transactions: { enabled: true },
+      });
+
+      // Claude-style: input excludes cache → total input includes cache tokens: 100 + 20 + 10 = 130
       expect(client.usage.input_tokens).toBe(130);
     });
   });

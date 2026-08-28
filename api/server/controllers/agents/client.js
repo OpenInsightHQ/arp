@@ -60,6 +60,7 @@ const {
   removeNullishValues,
 } = require('librechat-data-provider');
 const { spendTokens, spendStructuredTokens } = require('~/models/spendTokens');
+const { inputTokensExcludeCache } = require('@librechat/api');
 const { encodeAndFormat } = require('~/server/services/Files/images/encode');
 const { createContextHandlers } = require('~/app/clients/prompts');
 const { getConvoFiles } = require('~/models/Conversation');
@@ -910,17 +911,19 @@ ${historyString}`;
     if (!collectedUsage || !collectedUsage.length) {
       return;
     }
-    // Use first entry's input_tokens as the base input (represents initial user message context)
-    // Support both OpenAI format (input_token_details) and Anthropic format (cache_*_input_tokens)
+    // Full prompt of the FIRST call (arp/LibreChat display caliber). Claude-style
+    // entries report input WITHOUT cache, so cache is added; OpenAI-style entries
+    // report prompt_tokens which ALREADY includes cache — adding would double count.
     const firstUsage = collectedUsage[0];
-    const input_tokens =
-      (firstUsage?.input_tokens || 0) +
-      (Number(firstUsage?.input_token_details?.cache_creation) ||
-        Number(firstUsage?.cache_creation_input_tokens) ||
-        0) +
-      (Number(firstUsage?.input_token_details?.cache_read) ||
-        Number(firstUsage?.cache_read_input_tokens) ||
-        0);
+    const input_tokens = inputTokensExcludeCache(firstUsage)
+      ? (firstUsage?.input_tokens || 0) +
+        (Number(firstUsage?.input_token_details?.cache_creation) ||
+          Number(firstUsage?.cache_creation_input_tokens) ||
+          0) +
+        (Number(firstUsage?.input_token_details?.cache_read) ||
+          Number(firstUsage?.cache_read_input_tokens) ||
+          0)
+      : firstUsage?.input_tokens || 0;
 
     // Sum output_tokens directly from all entries - works for both sequential and parallel execution
     // This avoids the incremental calculation that produced negative values for parallel agents
@@ -948,14 +951,19 @@ ${historyString}`;
         0;
       const cache_read =
         Number(usage.input_token_details?.cache_read) || Number(usage.cache_read_input_tokens) || 0;
+      // Fresh (non-cached) input of this call: Claude-style reports it directly;
+      // OpenAI-style input already includes cache, so subtract (clamped).
+      const freshInput = inputTokensExcludeCache(usage)
+        ? Number(usage.input_tokens) || 0
+        : Math.max(0, (Number(usage.input_tokens) || 0) - cache_creation - cache_read);
 
       // Accumulate output tokens for the usage summary
       total_output_tokens += Number(usage.output_tokens) || 0;
-      total_input_tokens += Number(usage.input_tokens) || 0;
+      total_input_tokens += freshInput;
       total_cache_read_tokens += cache_read;
       total_cache_write_tokens += cache_creation;
       lastCallUsage = {
-        inputTokens: Number(usage.input_tokens) || 0,
+        inputTokens: freshInput,
         outputTokens: Number(usage.output_tokens) || 0,
         cacheReadTokens: cache_read,
         cacheWriteTokens: cache_creation,
@@ -974,7 +982,7 @@ ${historyString}`;
       if (cache_creation > 0 || cache_read > 0) {
         spendStructuredTokens(txMetadata, {
           promptTokens: {
-            input: usage.input_tokens,
+            input: freshInput,
             write: cache_creation,
             read: cache_read,
           },
@@ -988,7 +996,7 @@ ${historyString}`;
         continue;
       }
       spendTokens(txMetadata, {
-        promptTokens: usage.input_tokens,
+        promptTokens: freshInput,
         completionTokens: usage.output_tokens,
       }).catch((err) => {
         logger.error(
