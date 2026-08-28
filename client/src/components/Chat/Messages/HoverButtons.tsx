@@ -289,10 +289,6 @@ const HoverButtons = ({
               cacheWriteTokens={message.cacheWriteTokens}
               inputTokens={message.inputTokens}
               outputTokens={message.outputTokens}
-              totalInputTokens={message.totalInputTokens}
-              totalOutputTokens={message.totalOutputTokens}
-              totalCacheReadTokens={message.totalCacheReadTokens}
-              totalCacheWriteTokens={message.totalCacheWriteTokens}
             />
           )}
 
