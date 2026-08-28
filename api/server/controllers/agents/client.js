@@ -925,6 +925,16 @@ ${historyString}`;
     // Sum output_tokens directly from all entries - works for both sequential and parallel execution
     // This avoids the incremental calculation that produced negative values for parallel agents
     let total_output_tokens = 0;
+    /*
+      pi-consistent usage accounting (shared caliber with the pi backend, see AGENTS.md
+      "Token Accounting"): per-call fields describe the latest model call, total* fields
+      accumulate every call of the turn. inputTokens is the provider-reported non-cached
+      input; cacheReadTokens/cacheWriteTokens are recorded separately, never folded in.
+    */
+    let total_input_tokens = 0;
+    let total_cache_read_tokens = 0;
+    let total_cache_write_tokens = 0;
+    let lastCallUsage;
 
     for (const usage of collectedUsage) {
       if (!usage) {
@@ -941,6 +951,15 @@ ${historyString}`;
 
       // Accumulate output tokens for the usage summary
       total_output_tokens += Number(usage.output_tokens) || 0;
+      total_input_tokens += Number(usage.input_tokens) || 0;
+      total_cache_read_tokens += cache_read;
+      total_cache_write_tokens += cache_creation;
+      lastCallUsage = {
+        inputTokens: Number(usage.input_tokens) || 0,
+        outputTokens: Number(usage.output_tokens) || 0,
+        cacheReadTokens: cache_read,
+        cacheWriteTokens: cache_creation,
+      };
 
       const txMetadata = {
         context,
@@ -979,9 +998,28 @@ ${historyString}`;
       });
     }
 
+    /*
+      The pi endpoint flow must NOT populate the pi-consistent fields: the pi
+      backend persists the authoritative per-call/turn usage on the same
+      message documents, and arp's view through the translation layer loses
+      per-call and cache detail (LangChain drops the non-standard fields).
+    */
+    const isPIEndpointFlow =
+      this.options.isPIEndpoint === true ||
+      String(this.options.agent?.endpoint) === 'pi' ||
+      String(this.options.endpoint) === 'pi';
+
     this.usage = {
       input_tokens,
       output_tokens: total_output_tokens,
+      ...(!isPIEndpointFlow &&
+        lastCallUsage && {
+          ...lastCallUsage,
+          totalInputTokens: total_input_tokens,
+          totalOutputTokens: total_output_tokens,
+          totalCacheReadTokens: total_cache_read_tokens,
+          totalCacheWriteTokens: total_cache_write_tokens,
+        }),
     };
   }
 

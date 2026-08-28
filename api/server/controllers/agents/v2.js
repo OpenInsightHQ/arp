@@ -841,10 +841,38 @@ const V2ChatCompletionController = async (req, res) => {
       (Number(firstUsage?.input_token_details?.cache_read) ||
         Number(firstUsage?.cache_read_input_tokens) ||
         0);
-    const totalOutputTokens = collectedUsage.reduce(
-      (sum, u) => sum + (Number(u?.output_tokens) || 0),
-      0,
-    );
+    /*
+      pi-consistent usage accounting (shared caliber with the pi backend, see AGENTS.md
+      "Token Accounting"): per-call fields describe the latest model call, total* fields
+      accumulate every call of the turn. inputTokens is the provider-reported non-cached
+      input; cacheReadTokens/cacheWriteTokens are recorded separately, never folded in.
+    */
+    let totalOutputTokens = 0;
+    let totalInputTokens = 0;
+    let totalCacheReadTokens = 0;
+    let totalCacheWriteTokens = 0;
+    let lastCallUsage;
+    for (const usage of collectedUsage) {
+      if (!usage) {
+        continue;
+      }
+      const cacheWriteTokens =
+        Number(usage.input_token_details?.cache_creation) ||
+        Number(usage.cache_creation_input_tokens) ||
+        0;
+      const cacheReadTokens =
+        Number(usage.input_token_details?.cache_read) || Number(usage.cache_read_input_tokens) || 0;
+      totalOutputTokens += Number(usage.output_tokens) || 0;
+      totalInputTokens += Number(usage.input_tokens) || 0;
+      totalCacheReadTokens += cacheReadTokens;
+      totalCacheWriteTokens += cacheWriteTokens;
+      lastCallUsage = {
+        inputTokens: Number(usage.input_tokens) || 0,
+        outputTokens: Number(usage.output_tokens) || 0,
+        cacheReadTokens,
+        cacheWriteTokens,
+      };
+    }
 
     const filteredContentParts = filterMalformedContentParts(contentParts);
     // Heal artifact format issues (unclosed :::/fence, directive wrapped in
@@ -909,6 +937,14 @@ const V2ChatCompletionController = async (req, res) => {
           recursionLimit: `${maxAgentStep}/${recursionLimit}`,
           tokenCount: totalOutputTokens,
           inputTokenCount: messageInputTokens,
+          // pi-consistent usage fields: per-call (latest) + turn-cumulative totals
+          ...(lastCallUsage && {
+            ...lastCallUsage,
+            totalInputTokens,
+            totalOutputTokens,
+            totalCacheReadTokens,
+            totalCacheWriteTokens,
+          }),
         },
         { context: 'api/server/controllers/agents/v2.js - assistant message' },
       );

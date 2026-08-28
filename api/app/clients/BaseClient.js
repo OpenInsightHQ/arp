@@ -777,6 +777,23 @@ class BaseClient {
       if (usage != null && Number(usage[this.outputTokensKey]) > 0) {
         responseMessage.tokenCount = usage[this.outputTokensKey];
         responseMessage.inputTokenCount = usage[this.inputTokensKey] ?? 0;
+        /*
+          pi-consistent usage fields (shared caliber with the pi backend, see AGENTS.md
+          "Token Accounting"): per-call usage + turn-cumulative totals. Only present when
+          this client computed them from real per-call usage metadata; the pi endpoint
+          flow omits them because the pi backend persists the authoritative values on
+          the same message documents.
+        */
+        if (usage.inputTokens !== undefined) {
+          responseMessage.inputTokens = usage.inputTokens;
+          responseMessage.outputTokens = usage.outputTokens;
+          responseMessage.cacheReadTokens = usage.cacheReadTokens;
+          responseMessage.cacheWriteTokens = usage.cacheWriteTokens;
+          responseMessage.totalInputTokens = usage.totalInputTokens;
+          responseMessage.totalOutputTokens = usage.totalOutputTokens;
+          responseMessage.totalCacheReadTokens = usage.totalCacheReadTokens;
+          responseMessage.totalCacheWriteTokens = usage.totalCacheWriteTokens;
+        }
         completionTokens = responseMessage.tokenCount;
         await this.updateUserMessageTokenCount({
           usage,

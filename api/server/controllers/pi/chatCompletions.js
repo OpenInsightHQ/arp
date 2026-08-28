@@ -629,6 +629,13 @@ async function streamFromPI({ res, chatId, created, finalUserMessage, agentId, s
           total_tokens: piUsage.total_tokens || 0,
           cache_read_tokens: piUsage.cache_read_tokens || 0,
           cache_write_tokens: piUsage.cache_write_tokens || 0,
+          // Turn-cumulative counters from pi (ignored by LangChain, kept for
+          // direct consumers of this SSE stream; the pi backend persists the
+          // authoritative values on the message documents itself)
+          totalInputTokens: piUsage.totalInputTokens || 0,
+          totalOutputTokens: piUsage.totalOutputTokens || 0,
+          totalCacheReadTokens: piUsage.totalCacheReadTokens || 0,
+          totalCacheWriteTokens: piUsage.totalCacheWriteTokens || 0,
         },
       }) + '\n\n');
       if (typeof res.flush === 'function') {

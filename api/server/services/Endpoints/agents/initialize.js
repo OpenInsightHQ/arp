@@ -471,6 +471,9 @@ const initializeClient = async ({ req, res, signal, endpointOption }) => {
     maxContextTokens: primaryConfig.maxContextTokens,
     toolCallVisible: primaryConfig.toolCallVisible !== false,
     endpoint: isEphemeralAgentId(primaryConfig.id) ? primaryConfig.endpoint : EModelEndpoint.agents,
+    /** Definitive pi-endpoint signal from the request: pi flows must not write
+     *  pi-consistent usage fields (the pi backend owns them). */
+    isPIEndpoint: String(endpointOption?.endpoint) === 'pi',
   });
 
   if (streamId) {

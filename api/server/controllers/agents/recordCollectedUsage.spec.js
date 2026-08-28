@@ -39,7 +39,7 @@ jest.mock('@librechat/agents', () => ({
   }),
 }));
 
-const AgentClient = require('./client');
+const { AgentClient } = require('./client');
 
 describe('AgentClient - recordCollectedUsage', () => {
   let client;
@@ -682,6 +682,14 @@ describe('AgentClient - recordCollectedUsage', () => {
       expect(usage).toEqual({
         input_tokens: 100,
         output_tokens: 50,
+        inputTokens: 100,
+        outputTokens: 50,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        totalInputTokens: 100,
+        totalOutputTokens: 50,
+        totalCacheReadTokens: 0,
+        totalCacheWriteTokens: 0,
       });
     });
 
@@ -707,6 +715,89 @@ describe('AgentClient - recordCollectedUsage', () => {
       const usage = client.getStreamUsage();
       expect(usage).not.toBeNull();
       expect(Number(usage.output_tokens)).toBeGreaterThan(0);
+    });
+  });
+
+  describe('pi-consistent usage fields (shared caliber with the pi backend)', () => {
+    it('records per-call fields of the latest call and turn-cumulative totals', async () => {
+      const collectedUsage = [
+        {
+          input_tokens: 788,
+          output_tokens: 163,
+          model: 'claude-opus-4-5-20251101',
+          input_token_details: { cache_read: 0, cache_creation: 30808 },
+        },
+        {
+          input_tokens: 3802,
+          output_tokens: 149,
+          model: 'claude-opus-4-5-20251101',
+          input_token_details: { cache_read: 30808, cache_creation: 768 },
+        },
+        {
+          input_tokens: 26808,
+          output_tokens: 225,
+          model: 'claude-opus-4-5-20251101',
+          input_token_details: { cache_read: 31576, cache_creation: 0 },
+        },
+      ];
+
+      await client.recordCollectedUsage({
+        collectedUsage,
+        balance: { enabled: true },
+        transactions: { enabled: true },
+      });
+
+      // Per-call: latest entry only, cache never folded into inputTokens
+      expect(client.usage.inputTokens).toBe(26808);
+      expect(client.usage.outputTokens).toBe(225);
+      expect(client.usage.cacheReadTokens).toBe(31576);
+      expect(client.usage.cacheWriteTokens).toBe(0);
+      // Totals: every call of the turn
+      expect(client.usage.totalInputTokens).toBe(788 + 3802 + 26808);
+      expect(client.usage.totalOutputTokens).toBe(163 + 149 + 225);
+      expect(client.usage.totalCacheReadTokens).toBe(30808 + 31576);
+      expect(client.usage.totalCacheWriteTokens).toBe(30808 + 768);
+      // Legacy arp fields unchanged
+      expect(client.usage.input_tokens).toBe(31596);
+      expect(client.usage.output_tokens).toBe(537);
+    });
+
+    it('omits pi-consistent fields for the pi endpoint flow (agent endpoint "pi")', async () => {
+      mockAgent.endpoint = 'pi';
+      client = new AgentClient(mockOptions);
+      client.conversationId = 'convo-123';
+      client.user = 'user-123';
+
+      const collectedUsage = [{ input_tokens: 100, output_tokens: 50, model: 'one-pi' }];
+      await client.recordCollectedUsage({
+        collectedUsage,
+        balance: { enabled: true },
+        transactions: { enabled: true },
+      });
+
+      // pi backend persists the authoritative fields on the same documents
+      expect(client.usage.inputTokens).toBeUndefined();
+      expect(client.usage.totalInputTokens).toBeUndefined();
+      // Legacy arp fields still present
+      expect(client.usage.input_tokens).toBe(100);
+      expect(client.usage.output_tokens).toBe(50);
+    });
+
+    it('omits pi-consistent fields for the pi endpoint flow (isPIEndpoint flag)', async () => {
+      mockOptions.isPIEndpoint = true;
+      client = new AgentClient(mockOptions);
+      client.conversationId = 'convo-123';
+      client.user = 'user-123';
+
+      const collectedUsage = [{ input_tokens: 100, output_tokens: 50, model: 'one-pi' }];
+      await client.recordCollectedUsage({
+        collectedUsage,
+        balance: { enabled: true },
+        transactions: { enabled: true },
+      });
+
+      expect(client.usage.inputTokens).toBeUndefined();
+      expect(client.usage.totalCacheReadTokens).toBeUndefined();
     });
   });
 });

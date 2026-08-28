@@ -209,3 +209,25 @@ cd packages/api && npm run build
 ```
 
 `nodemon` ignores `packages/` — it will NOT auto-restart on `packages/api` changes. Manual backend restart is required.
+
+---
+
+## Token Accounting (shared with the pi backend)
+
+arp and pi (repo: `pi-agent-github`) write the same token usage fields on assistant `messages` documents, and the two sides' statistics calibers **MUST stay consistent** — any change to these fields or their calculation on one side must be mirrored on the other in the same change.
+
+Shared fields (assistant message documents):
+
+- Per-call usage — describes one actual model call (the latest call behind the document): `inputTokens` (provider-reported non-cached input), `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`. Cache tokens are recorded separately and never folded into `inputTokens`.
+- Turn-cumulative usage — sums over every model call of the turn: `totalInputTokens`, `totalOutputTokens`, `totalCacheReadTokens`, `totalCacheWriteTokens`. (pi additionally persists session-cumulative `total*` on the `conversations` document.)
+
+Writers:
+
+- Frontend agent chat: `AgentClient.recordCollectedUsage` (`api/server/controllers/agents/client.js`) computes the fields from LangChain usage metadata; `BaseClient.sendMessage` (`api/app/clients/BaseClient.js`) persists them on the assistant message.
+- v2 API: `api/server/controllers/agents/v2.js` computes and saves them on the assistant message.
+- pi endpoint flows (`endpoint === 'pi'`, detected via the `isPIEndpoint` client option from `initialize.js`, or the agent's endpoint) do **not** write these fields — the pi backend persists the authoritative per-call/turn values on the same documents, and arp's view through the OpenAI translation layer loses per-call and cache detail.
+
+Legacy fields kept for LibreChat compatibility (distinct from the shared caliber above):
+
+- Assistant `tokenCount` = cumulative output tokens of the turn; `inputTokenCount` = first call's full prompt (incl. cache).
+- User `tokenCount` = `usage.input_tokens − Σ(context message estimates)` (`calculateCurrentTokenCount` in `client.js`) — this assumes `input_tokens` is a single call's prompt, which is why pi's `/prompt` SSE `usage` scopes `prompt_tokens`/`cache_*_tokens` to the **first** model call of the turn (a pi turn contains N internal tool-loop calls; forwarding the cumulative sum inflated these numbers by ~N×).
