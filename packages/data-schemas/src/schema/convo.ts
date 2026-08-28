@@ -42,6 +42,26 @@ const convoSchema: Schema<IConversation> = new Schema(
     finish_reason: {
       type: String,
     },
+    /*
+     * Session-cumulative usage totals (shared caliber with the pi backend, see
+     * AGENTS.md "Token Accounting"): sums over every model call of every turn.
+     */
+    totalInputTokens: {
+      type: Number,
+      default: undefined,
+    },
+    totalOutputTokens: {
+      type: Number,
+      default: undefined,
+    },
+    totalCacheReadTokens: {
+      type: Number,
+      default: undefined,
+    },
+    totalCacheWriteTokens: {
+      type: Number,
+      default: undefined,
+    },
     expiredAt: {
       type: Date,
     },

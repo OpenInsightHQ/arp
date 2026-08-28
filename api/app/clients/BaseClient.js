@@ -1013,6 +1013,23 @@ class BaseClient {
       ...endpointOptions,
     };
 
+    /*
+      Session-cumulative usage totals (shared caliber with the pi backend, see
+      AGENTS.md "Token Accounting"): accumulate this turn's usage onto the
+      conversation record. Turn totals are only present on assistant messages
+      of native agent flows — the pi endpoint flow is persisted by the pi
+      backend itself and never passes here.
+    */
+    if (message.totalInputTokens !== undefined) {
+      const convo = await getConvo(this.options?.req?.user?.id, message.conversationId);
+      fieldsToKeep.totalInputTokens = (convo?.totalInputTokens ?? 0) + message.totalInputTokens;
+      fieldsToKeep.totalOutputTokens = (convo?.totalOutputTokens ?? 0) + message.totalOutputTokens;
+      fieldsToKeep.totalCacheReadTokens =
+        (convo?.totalCacheReadTokens ?? 0) + message.totalCacheReadTokens;
+      fieldsToKeep.totalCacheWriteTokens =
+        (convo?.totalCacheWriteTokens ?? 0) + message.totalCacheWriteTokens;
+    }
+
     const existingConvo =
       this.fetchedConvo === true
         ? null

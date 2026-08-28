@@ -61,6 +61,11 @@ export interface IConversation extends Document {
    * (e.g. 'stop', 'tool_calls', 'recursion_limit', 'rate_limit', 'error').
    */
   finish_reason?: string;
+  /** Session-cumulative usage totals (shared caliber with the pi backend) */
+  totalInputTokens?: number;
+  totalOutputTokens?: number;
+  totalCacheReadTokens?: number;
+  totalCacheWriteTokens?: number;
   expiredAt?: Date;
   source?: string;
   sourceDataId?: string;

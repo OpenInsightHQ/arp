@@ -55,6 +55,12 @@ export const excludedKeys = new Set([
   'spec',
   'disableParams',
   'finish_reason',
+  // pi-consistent session-cumulative usage totals — kept on the conversation
+  // record, never unset by the endpoint-options pruning in BaseClient
+  'totalInputTokens',
+  'totalOutputTokens',
+  'totalCacheReadTokens',
+  'totalCacheWriteTokens',
 ]);
 
 export enum SettingsViews {

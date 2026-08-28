@@ -46,7 +46,7 @@ const {
   wrapResponseWrite,
 } = require('~/server/services/StreamLog');
 const { spendTokens, spendStructuredTokens } = require('~/models/spendTokens');
-const { getConvoFiles, searchConversation } = require('~/models/Conversation');
+const { getConvo, getConvoFiles, searchConversation } = require('~/models/Conversation');
 const { getAgent } = require('~/models/Agent');
 const {
   summarizeOnRecursionLimit,
@@ -950,6 +950,22 @@ const V2ChatCompletionController = async (req, res) => {
       );
     }
 
+    /*
+      Session-cumulative usage totals on the conversation record (shared caliber
+      with the pi backend, see AGENTS.md "Token Accounting"): accumulate this
+      turn's usage onto the existing totals.
+    */
+    let convoUsageTotals;
+    if (lastCallUsage) {
+      const existingConvo = await getConvo(userSn, conversationId);
+      convoUsageTotals = {
+        totalInputTokens: (existingConvo?.totalInputTokens ?? 0) + totalInputTokens,
+        totalOutputTokens: (existingConvo?.totalOutputTokens ?? 0) + totalOutputTokens,
+        totalCacheReadTokens: (existingConvo?.totalCacheReadTokens ?? 0) + totalCacheReadTokens,
+        totalCacheWriteTokens: (existingConvo?.totalCacheWriteTokens ?? 0) + totalCacheWriteTokens,
+      };
+    }
+
     await db.saveConvo(
       fakeReq,
       {
@@ -959,6 +975,7 @@ const V2ChatCompletionController = async (req, res) => {
         agent_id: agentId,
         model: agentId,
         finish_reason: successFinishReason,
+        ...(convoUsageTotals && convoUsageTotals),
       },
       { context: 'api/server/controllers/agents/v2.js - conversation' },
     );

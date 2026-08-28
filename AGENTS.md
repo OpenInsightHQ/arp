@@ -219,12 +219,12 @@ arp and pi (repo: `pi-agent-github`) write the same token usage fields on assist
 Shared fields (assistant message documents):
 
 - Per-call usage — describes one actual model call (the latest call behind the document): `inputTokens` (provider-reported non-cached input), `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`. Cache tokens are recorded separately and never folded into `inputTokens`.
-- Turn-cumulative usage — sums over every model call of the turn: `totalInputTokens`, `totalOutputTokens`, `totalCacheReadTokens`, `totalCacheWriteTokens`. (pi additionally persists session-cumulative `total*` on the `conversations` document.)
+- Turn-cumulative usage — sums over every model call of the turn: `totalInputTokens`, `totalOutputTokens`, `totalCacheReadTokens`, `totalCacheWriteTokens`. Session-cumulative `total*` live on the `conversations` record (both pi and arp native flows maintain them).
 
 Writers:
 
-- Frontend agent chat: `AgentClient.recordCollectedUsage` (`api/server/controllers/agents/client.js`) computes the fields from LangChain usage metadata; `BaseClient.sendMessage` (`api/app/clients/BaseClient.js`) persists them on the assistant message.
-- v2 API: `api/server/controllers/agents/v2.js` computes and saves them on the assistant message.
+- Frontend agent chat: `AgentClient.recordCollectedUsage` (`api/server/controllers/agents/client.js`) computes the fields from LangChain usage metadata; `BaseClient.sendMessage` (`api/app/clients/BaseClient.js`) persists them on the assistant message, and `BaseClient.saveMessageToDatabase` accumulates the session-cumulative `total*` onto the `conversations` record (kept out of the endpoint-options pruning via `excludedKeys`).
+- v2 API: `api/server/controllers/agents/v2.js` computes and saves them on the assistant message, and accumulates the session-cumulative `total*` onto the `conversations` record.
 - pi endpoint flows (`endpoint === 'pi'`, detected via the `isPIEndpoint` client option from `initialize.js`, or the agent's endpoint) do **not** write these fields — the pi backend persists the authoritative per-call/turn values on the same documents, and arp's view through the OpenAI translation layer loses per-call and cache detail.
 
 Legacy fields kept for LibreChat compatibility (distinct from the shared caliber above):
