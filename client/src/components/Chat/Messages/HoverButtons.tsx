@@ -160,8 +160,6 @@ const HoverButtons = ({
   }
 
   const { isCreatedByUser, error } = message;
-  const isOnePIMessage =
-    !isCreatedByUser && message.endpoint === 'pi' && message.model === 'one-pi';
 
   if (error === true) {
     return (
@@ -279,36 +277,37 @@ const HoverButtons = ({
           className={cn(
             'flex items-center gap-4 text-xs text-text-tertiary',
             // 最后一条消息固定显示，历史消息 hover 显示
-            !isLast && 'md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100',
+            !isLast && 'md:opacity-0 md:group-focus-within:opacity-100 md:group-hover:opacity-100',
           )}
         >
-          {/* Token Count - ONE-PI 显示明细 Tooltip，其他 Agent 保持原有展示 */}
-          {message.tokenCount != null && message.tokenCount > 0 &&
-            (isOnePIMessage ? (
-              <TokenUsageTooltip
-                inputTokenCount={message.inputTokenCount}
-                tokenCount={message.tokenCount}
-                cacheReadTokens={message.cacheReadTokens}
-                cacheWriteTokens={message.cacheWriteTokens}
-              />
-            ) : (
-              <span className="flex items-center gap-2">
-                <span title="输入 Token 数">In: {(message.inputTokenCount ?? 0).toLocaleString()}</span>
-                <span title="输出 Token 数">Out: {message.tokenCount.toLocaleString()}</span>
-              </span>
-            ))}
+          {/* Token Count - 助手消息统一显示明细 Tooltip（ONE-PI 与其他 Agent 共用同一口径） */}
+          {message.tokenCount != null && message.tokenCount > 0 && (
+            <TokenUsageTooltip
+              inputTokenCount={message.inputTokenCount}
+              tokenCount={message.tokenCount}
+              cacheReadTokens={message.cacheReadTokens}
+              cacheWriteTokens={message.cacheWriteTokens}
+              inputTokens={message.inputTokens}
+              outputTokens={message.outputTokens}
+              totalInputTokens={message.totalInputTokens}
+              totalOutputTokens={message.totalOutputTokens}
+              totalCacheReadTokens={message.totalCacheReadTokens}
+              totalCacheWriteTokens={message.totalCacheWriteTokens}
+            />
+          )}
 
           {/* Timestamp - 完整日期时间 */}
           {message.updatedAt && (
             <span title="回复完成时间">
-              TIME: {new Date(message.updatedAt).toLocaleString('zh-CN', {
+              TIME:{' '}
+              {new Date(message.updatedAt).toLocaleString('zh-CN', {
                 year: 'numeric',
                 month: '2-digit',
                 day: '2-digit',
                 hour: '2-digit',
                 minute: '2-digit',
                 second: '2-digit',
-                hour12: false
+                hour12: false,
               })}
             </span>
           )}

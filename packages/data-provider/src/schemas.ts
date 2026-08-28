@@ -628,6 +628,12 @@ export const tMessageSchema = z.object({
   inputTokenCount: z.number().optional(),
   cacheReadTokens: z.number().optional(),
   cacheWriteTokens: z.number().optional(),
+  inputTokens: z.number().optional(),
+  outputTokens: z.number().optional(),
+  totalInputTokens: z.number().optional(),
+  totalOutputTokens: z.number().optional(),
+  totalCacheReadTokens: z.number().optional(),
+  totalCacheWriteTokens: z.number().optional(),
 });
 
 export type MemoryArtifact = {

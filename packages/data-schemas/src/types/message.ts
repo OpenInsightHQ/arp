@@ -13,6 +13,16 @@ export interface IMessage extends Document {
   invocationId?: number;
   parentMessageId?: string;
   tokenCount?: number;
+  /** pi-consistent per-call usage (latest model call behind the document); input excludes cache */
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  /** Turn-cumulative usage: sums over every model call of the turn */
+  totalInputTokens?: number;
+  totalOutputTokens?: number;
+  totalCacheReadTokens?: number;
+  totalCacheWriteTokens?: number;
   summaryTokenCount?: number;
   sender?: string;
   text?: string;
