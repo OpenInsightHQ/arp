@@ -330,6 +330,15 @@ const V2ChatCompletionController = async (req, res) => {
   }
   const { userSn, conversationId, isNewConversation } = ctx;
 
+  /*
+    API-key auth populated req.user with the KEY OWNER — that identity is only
+    for the route-level validation that has already run. From here on the
+    acting user is the v2 user resolved from X-User-Id/user_id, so everything
+    keying off req.user downstream (agent init, tool loading, prompt special
+    vars, PI workspace, artifacts, credentials) acts as the correct user.
+  */
+  req.user = { ...req.user, id: userSn };
+
   const validation = validateRequest(req.body);
   if (isChatCompletionValidationFailure(validation)) {
     return sendErrorResponse(res, 400, validation.error);
@@ -407,12 +416,12 @@ const V2ChatCompletionController = async (req, res) => {
      * PI workspace attachments: fetch the conversation's PI workspace
      * inventory once via the canonical listPiFiles (same as the frontend
      * agent flow); initializeAgent turns it into the <attachments> prompt
-     * section and mounts read_text_file. Keyed by the API-key owner id —
-     * the same id PI tool execution uses on this path.
+     * section and mounts read_text_file. Keyed by the v2 user (userSn) —
+     * the same id PI tool execution uses on this path (req.user.id).
      */
     let piAttachmentFiles;
     if (isPIConfigured(req) && conversationId) {
-      piAttachmentFiles = await listPiFiles(agent.id, conversationId, req.user?.id);
+      piAttachmentFiles = await listPiFiles(agent.id, conversationId, userSn);
     }
 
     // PI-side persistence key: pi mounts its subtree under the in-flight
@@ -783,7 +792,7 @@ const V2ChatCompletionController = async (req, res) => {
       configurable: {
         thread_id: conversationId,
         user_id: userSn,
-        user: createSafeUser({ ...req.user, id: userSn }),
+        user: createSafeUser(req.user),
         requestBody: {
           messageId: responseMessageId,
           conversationId,
@@ -1366,4 +1375,9 @@ const v2PIChatCompletionController = async (req, res) => {
   });
 };
 
-module.exports = { V2ChatCompletionController, resolveV2Context, v2PIChatCompletionController };
+module.exports = {
+  V2ChatCompletionController,
+  resolveV2Context,
+  resolveUserByThirdPartyId,
+  v2PIChatCompletionController,
+};

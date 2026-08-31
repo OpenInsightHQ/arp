@@ -3,13 +3,21 @@ const router = express.Router();
 const multer = require('multer');
 const { SystemRoles } = require('librechat-data-provider');
 const { requireJwtAuth, requireJwtOrApiKey } = require('../middleware/');
-const { piChatCompletionsController, PI_HOST, PI_API_KEY } = require('~/server/controllers/pi/chatCompletions');
+const {
+  piChatCompletionsController,
+  PI_HOST,
+  PI_API_KEY,
+} = require('~/server/controllers/pi/chatCompletions');
 const { getLangFromReq, getPiSystemPrompt } = require('@librechat/api');
+const { resolveUserByThirdPartyId } = require('~/server/controllers/agents/v2');
 const { safeHttpStatus, sanitizeForLog } = require('~/server/utils/sanitize');
 const { searchConversation } = require('~/models/Conversation');
 
 const PI_UPLOAD_LIMIT_MB = parseInt(process.env.PI_UPLOAD_LIMIT_MB || '1024', 10);
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: PI_UPLOAD_LIMIT_MB * 1024 * 1024 } });
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: PI_UPLOAD_LIMIT_MB * 1024 * 1024 },
+});
 
 async function forwardPIRequest(req, res, endpoint, options = {}) {
   const query = req.query;
@@ -65,7 +73,7 @@ async function forwardPIRequest(req, res, endpoint, options = {}) {
 
     if (contentType.includes('application/json')) {
       const data = await response.json();
-      console.log("[PI Route] Response body:", JSON.stringify(data));
+      console.log('[PI Route] Response body:', JSON.stringify(data));
       return res.status(safeHttpStatus(response.status)).json(data);
     }
 
@@ -110,14 +118,16 @@ async function forwardPIPostRequest(req, res, endpoint, options = {}) {
 
     if (contentType.includes('application/json')) {
       const data = await response.json();
-      console.log("[PI Route] POST Response body:", JSON.stringify(data));
+      console.log('[PI Route] POST Response body:', JSON.stringify(data));
       return res.status(safeHttpStatus(response.status)).json(data);
     }
 
     const buffer = await response.arrayBuffer();
     res.send(Buffer.from(buffer));
   } catch (error) {
-    const cause = error.cause ? ` (cause: ${error.cause.code || error.cause.message || error.cause})` : '';
+    const cause = error.cause
+      ? ` (cause: ${error.cause.code || error.cause.message || error.cause})`
+      : '';
     console.error(`[PI Route] POST Error: ${error.message}${cause}`);
     return res.status(500).json({ error: error.message });
   }
@@ -181,6 +191,25 @@ router.get('/files', requireJwtAuth, async (req, res) => {
 });
 
 /**
+ * Resolves the v2 acting user (DMP userSn) from the X-User-Id header.
+ * v2 conversations and their PI workspaces are keyed by userSn, NOT by the
+ * API key owner. Returns null when the header is absent or unresolvable.
+ */
+async function resolveV2UserSn(req) {
+  const thirdPartyUserId = req.headers['x-user-id'];
+  if (!thirdPartyUserId || typeof thirdPartyUserId !== 'string') {
+    return null;
+  }
+  try {
+    const dmpUser = await resolveUserByThirdPartyId(thirdPartyUserId);
+    return dmpUser.userSn ?? null;
+  } catch (error) {
+    console.warn('[PI Route] X-User-Id resolution failed:', error.message);
+    return null;
+  }
+}
+
+/**
  * GET /files/download
  *
  * Accepts JWT (frontend) or Agent API key (`Bearer sk-...`) auth, like the
@@ -188,8 +217,11 @@ router.get('/files', requireJwtAuth, async (req, res) => {
  * PI sessionId equals the LibreChat conversationId, so API-key downloads
  * resolve the owner from the conversation record:
  *   - ADMIN API key: no user validation — downloads any user's session file
- *     (falls back to the X-User-Id header when no conversation record exists)
- *   - Non-admin API key: the session must belong to the API key's user
+ *     (falls back to the X-User-Id header, resolved to its DMP userSn, when
+ *     no conversation record exists)
+ *   - Non-admin API key: the session must belong to the API key's user or to
+ *     the v2 user resolved from the X-User-Id header (v2 sessions are owned
+ *     by that user, not the key owner)
  */
 router.get('/files/download', requireJwtOrApiKey, async (req, res) => {
   if (!req.apiKeyId) {
@@ -216,14 +248,14 @@ router.get('/files/download', requireJwtOrApiKey, async (req, res) => {
     if (!isAdmin) {
       return res.status(404).json({ error: `Session not found: ${sessionId}` });
     }
-    const headerUserId = req.headers['x-user-id'];
-    if (!headerUserId || typeof headerUserId !== 'string') {
+    const v2UserSn = await resolveV2UserSn(req);
+    if (!v2UserSn) {
       return res.status(404).json({ error: `Session not found: ${sessionId}` });
     }
-    return forwardPIRequest(req, res, '/files/download', { forwardUserId: headerUserId });
+    return forwardPIRequest(req, res, '/files/download', { forwardUserId: v2UserSn });
   }
 
-  if (!isAdmin && ownerUserId !== req.user.id) {
+  if (!isAdmin && ownerUserId !== req.user.id && ownerUserId !== (await resolveV2UserSn(req))) {
     return res.status(403).json({ error: 'You do not have access to this session' });
   }
 
@@ -266,7 +298,11 @@ router.post('/prompt', requireJwtAuth, async (req, res) => {
     return res.status(400).json({ error: 'message, agentId and sessionId are required' });
   }
 
-  console.log('[PI Route] Prompt request:', { agentId: sanitizeForLog(agentId), sessionId: sanitizeForLog(sessionId), messageLength: sanitizeForLog(message.length) });
+  console.log('[PI Route] Prompt request:', {
+    agentId: sanitizeForLog(agentId),
+    sessionId: sanitizeForLog(sessionId),
+    messageLength: sanitizeForLog(message.length),
+  });
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -282,7 +318,14 @@ router.post('/prompt', requireJwtAuth, async (req, res) => {
         'api-key': PI_API_KEY,
         'X-User-Id': req.user.id,
       },
-      body: JSON.stringify({ message, agentId, sessionId, cwd, stream, systemPrompt: await getPiSystemPrompt(getLangFromReq(req)) }),
+      body: JSON.stringify({
+        message,
+        agentId,
+        sessionId,
+        cwd,
+        stream,
+        systemPrompt: await getPiSystemPrompt(getLangFromReq(req)),
+      }),
     });
 
     if (!response.ok) {
