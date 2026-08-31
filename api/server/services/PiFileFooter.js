@@ -117,6 +117,25 @@ function collectResponseText(response) {
 }
 
 /**
+ * Append an already-built footer to the response message in place — `text`
+ * plus a trailing TEXT content part (matching the sibling parts' storage
+ * shape), the same visible surface as appending before initial persistence.
+ * @param {Partial<TMessage>} response - mutated in place
+ * @param {string} footer
+ */
+function appendFooterToResponse(response, footer) {
+  response.text = (response.text || '') + footer;
+  if (Array.isArray(response.content) && response.content.length > 0) {
+    const sibling = response.content.find((p) => p?.type === ContentTypes.TEXT);
+    const usePlainString = sibling != null && typeof sibling[ContentTypes.TEXT] === 'string';
+    response.content.push({
+      type: ContentTypes.TEXT,
+      [ContentTypes.TEXT]: usePlainString ? footer : { value: footer },
+    });
+  }
+}
+
+/**
  * Append the pi file-links footer to the response message so the download
  * links render on the page. Agent messages may be dual-content (content-parts
  * array with empty `text`), so the footer is appended to BOTH `text` and a
@@ -165,16 +184,13 @@ async function appendPiFileLinks(req, response) {
   if (!footer) {
     return null;
   }
-  response.text = (response.text || '') + footer;
-  if (Array.isArray(response.content) && response.content.length > 0) {
-    const sibling = response.content.find((p) => p?.type === ContentTypes.TEXT);
-    const usePlainString = sibling != null && typeof sibling[ContentTypes.TEXT] === 'string';
-    response.content.push({
-      type: ContentTypes.TEXT,
-      [ContentTypes.TEXT]: usePlainString ? footer : { value: footer },
-    });
-  }
+  appendFooterToResponse(response, footer);
   return footer;
 }
 
-module.exports = { appendPiFileLinks, extractSummaryText, buildSkillRunFooter };
+module.exports = {
+  appendPiFileLinks,
+  appendFooterToResponse,
+  extractSummaryText,
+  buildSkillRunFooter,
+};

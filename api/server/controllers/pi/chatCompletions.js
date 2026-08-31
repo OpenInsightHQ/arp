@@ -14,7 +14,11 @@ const {
   appendGalleryVersion,
   upsertGallerySqlQueries,
 } = require('~/server/services/Artifacts/galleryPublishing');
-const { collectPiGeneratedFiles, filterPiResultFiles, buildPiFileLinks } = require('~/server/services/PIService');
+const {
+  collectPiGeneratedFiles,
+  filterPiResultFiles,
+  buildPiFileLinks,
+} = require('~/server/services/PIService');
 
 const PI_HOST = process.env.PI_HOST || process.env.PI_AGENT_URL || 'http://localhost:3000';
 const PI_API_KEY = process.env.PI_API_KEY || 'testkey';
@@ -27,7 +31,9 @@ async function buildFileLinks(text, agentId, sessionId, userId, startTime) {
   const realFiles = await collectPiGeneratedFiles(agentId, sessionId, userId, startTime);
 
   if (realFiles.length === 0) {
-    console.log(`[buildFileLinks] No files for agentId=${agentId} sessionId=${sessionId} userId=${userId} — skipping link injection`);
+    console.log(
+      `[buildFileLinks] No files for agentId=${agentId} sessionId=${sessionId} userId=${userId} — skipping link injection`,
+    );
     return null;
   }
 
@@ -51,9 +57,10 @@ function extractSqlFromToolCalls(messages) {
     if (msg.role === 'assistant' && msg.tool_calls) {
       for (const tc of msg.tool_calls) {
         try {
-          const args = typeof tc.function?.arguments === 'string'
-            ? JSON.parse(tc.function.arguments)
-            : tc.function?.arguments || {};
+          const args =
+            typeof tc.function?.arguments === 'string'
+              ? JSON.parse(tc.function.arguments)
+              : tc.function?.arguments || {};
 
           const sql = args.sql || args.query || args.sqlQuery || args.statement;
           if (sql && sql.trim().toUpperCase().startsWith('SELECT')) {
@@ -93,7 +100,9 @@ async function handleArtifactSolidification(message, userId, conversationId) {
   }
 
   if (!artifactId) {
-    const legacyMatch = message.match(/^\[固化报告\](?:[\s\S]*?)targetMessageId:\s*([\w-]+)[\s\S]*?artifactId:\s*([\w-]+)/);
+    const legacyMatch = message.match(
+      /^\[固化报告\](?:[\s\S]*?)targetMessageId:\s*([\w-]+)[\s\S]*?artifactId:\s*([\w-]+)/,
+    );
     if (legacyMatch) {
       targetMessageId = legacyMatch[1];
       artifactId = legacyMatch[2];
@@ -104,17 +113,27 @@ async function handleArtifactSolidification(message, userId, conversationId) {
     return { success: false };
   }
 
-  console.log('[PI Solidification] Starting:', { targetMessageId, artifactId, userId: sanitizeForLog(userId), conversationId });
+  console.log('[PI Solidification] Starting:', {
+    targetMessageId,
+    artifactId,
+    userId: sanitizeForLog(userId),
+    conversationId,
+  });
 
   try {
-    const artifact = await GalleryArtifact.findOne(buildSolidificationArtifactQuery({
-      artifactId,
-      userId,
-      conversationId,
-      targetMessageId,
-    }));
+    const artifact = await GalleryArtifact.findOne(
+      buildSolidificationArtifactQuery({
+        artifactId,
+        userId,
+        conversationId,
+        targetMessageId,
+      }),
+    );
     if (!artifact) {
-      return { success: false, error: 'Published report identity does not match this conversation and target' };
+      return {
+        success: false,
+        error: 'Published report identity does not match this conversation and target',
+      };
     }
 
     const reportTargetMessageId = artifact.targetMessageId;
@@ -126,23 +145,28 @@ async function handleArtifactSolidification(message, userId, conversationId) {
       return { success: false, error: `Target message not found: ${reportTargetMessageId}` };
     }
 
-    console.log('[PI Solidification] Conversation messages to solidify:', conversationMessages.length);
+    console.log(
+      '[PI Solidification] Conversation messages to solidify:',
+      conversationMessages.length,
+    );
 
     if (conversationMessages.length === 0) {
       return { success: false, error: 'No messages to solidify' };
     }
 
-    const piMessages = conversationMessages.map(msg => ({
+    const piMessages = conversationMessages.map((msg) => ({
       role: msg.isCreatedByUser ? 'user' : 'assistant',
       content: msg.text || '',
-      tool_calls: msg.tool_calls ? msg.tool_calls.map(tc => ({
-        id: tc.id,
-        type: 'function',
-        function: {
-          name: tc.function?.name || '',
-          arguments: tc.function?.arguments || '',
-        },
-      })) : undefined,
+      tool_calls: msg.tool_calls
+        ? msg.tool_calls.map((tc) => ({
+            id: tc.id,
+            type: 'function',
+            function: {
+              name: tc.function?.name || '',
+              arguments: tc.function?.arguments || '',
+            },
+          }))
+        : undefined,
     }));
 
     const inferredParams = {};
@@ -152,10 +176,12 @@ async function handleArtifactSolidification(message, userId, conversationId) {
           try {
             const args = JSON.parse(tc.function?.arguments || '{}');
             for (const [key, value] of Object.entries(args)) {
-              if (!key.toLowerCase().includes('key') &&
-                  !key.toLowerCase().includes('secret') &&
-                  !key.toLowerCase().includes('token') &&
-                  !key.toLowerCase().includes('password')) {
+              if (
+                !key.toLowerCase().includes('key') &&
+                !key.toLowerCase().includes('secret') &&
+                !key.toLowerCase().includes('token') &&
+                !key.toLowerCase().includes('password')
+              ) {
                 inferredParams[key] = value;
               }
             }
@@ -194,29 +220,34 @@ async function handleArtifactSolidification(message, userId, conversationId) {
     }
 
     const generateResult = await generateResponse.json();
-    console.log('[PI Solidification] Generate result:', JSON.stringify(generateResult).slice(0, 500));
+    console.log(
+      '[PI Solidification] Generate result:',
+      JSON.stringify(generateResult).slice(0, 500),
+    );
 
     const skillId = generateResult.skillId || generateResult.id || skillName;
     const skillPath = generateResult.skillPath || null;
 
     await GalleryArtifact.updateOne(
       { galleryArtifactId: artifactId, userId, conversationId, targetMessageId },
-      { $set: { skillId, skillPath } }
+      { $set: { skillId, skillPath } },
     );
 
     console.log('[PI Solidification] Artifact updated:', { skillId, skillPath });
 
-    const dbMessagesForExtraction = conversationMessages.map(msg => ({
+    const dbMessagesForExtraction = conversationMessages.map((msg) => ({
       role: msg.isCreatedByUser ? 'user' : 'assistant',
       content: msg.text || '',
-      tool_calls: msg.tool_calls ? msg.tool_calls.map(tc => ({
-        id: tc.id,
-        type: 'function',
-        function: {
-          name: tc.function?.name || '',
-          arguments: tc.function?.arguments || '',
-        },
-      })) : undefined,
+      tool_calls: msg.tool_calls
+        ? msg.tool_calls.map((tc) => ({
+            id: tc.id,
+            type: 'function',
+            function: {
+              name: tc.function?.name || '',
+              arguments: tc.function?.arguments || '',
+            },
+          }))
+        : undefined,
     }));
 
     const extractedQueries = extractSqlFromToolCalls(dbMessagesForExtraction);
@@ -259,11 +290,11 @@ async function handleArtifactSolidification(message, userId, conversationId) {
       success: true,
       artifactId,
       skillId,
-      responseMessage: extractedQueries.length > 0
-        ? `✅ 固化成功！已保存 ${extractedQueries.length} 条数据查询，Skill 已创建: ${skillId}，作品集将自动使用此 Skill 定时刷新数据。`
-        : `✅ 固化成功！Skill 已创建: ${skillId}，作品集将自动使用此 Skill 定时刷新数据。`,
+      responseMessage:
+        extractedQueries.length > 0
+          ? `✅ 固化成功！已保存 ${extractedQueries.length} 条数据查询，Skill 已创建: ${skillId}，作品集将自动使用此 Skill 定时刷新数据。`
+          : `✅ 固化成功！Skill 已创建: ${skillId}，作品集将自动使用此 Skill 定时刷新数据。`,
     };
-
   } catch (error) {
     console.error('[PI Solidification] Error:', error.message);
     return { success: false, error: error.message };
@@ -283,8 +314,8 @@ function extractLastUserMessage(messages) {
   if (typeof userMessage !== 'string') {
     if (Array.isArray(userMessage)) {
       userMessage = userMessage
-        .filter(part => part.type === 'text')
-        .map(part => part.text || '')
+        .filter((part) => part.type === 'text')
+        .map((part) => part.text || '')
         .join('');
     } else if (userMessage && typeof userMessage === 'object') {
       userMessage = userMessage.text || userMessage.content || '';
@@ -327,7 +358,7 @@ async function sendSolidificationStream(res, chatId, created, content) {
   const chunks = content.match(/.{1,50}/g) || [content];
   for (const chunk of chunks) {
     writeSseChunk(res, buildChunk(chatId, created, { content: chunk }));
-    await new Promise(r => setTimeout(r, 20));
+    await new Promise((r) => setTimeout(r, 20));
   }
 
   writeSseChunk(res, buildChunk(chatId, created, {}, 'stop'));
@@ -357,11 +388,13 @@ async function handleSolidificationRequest({ userMessage, userId, conversationId
         object: 'chat.completion',
         created: Math.floor(Date.now() / 1000),
         model: 'one-pi',
-        choices: [{
-          index: 0,
-          message: { role: 'assistant', content: responseContent },
-          finish_reason: 'stop',
-        }],
+        choices: [
+          {
+            index: 0,
+            message: { role: 'assistant', content: responseContent },
+            finish_reason: 'stop',
+          },
+        ],
         usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
       });
     }
@@ -379,7 +412,16 @@ async function handleSolidificationRequest({ userMessage, userId, conversationId
   return true;
 }
 
-async function runNonStreamingPI({ finalUserMessage, agentId, sessionId, userId, res, streamStartTime, systemPrompt }) {
+async function runNonStreamingPI({
+  req,
+  finalUserMessage,
+  agentId,
+  sessionId,
+  userId,
+  res,
+  streamStartTime,
+  systemPrompt,
+}) {
   try {
     const response = await fetch(`${PI_HOST}/prompt`, {
       method: 'POST',
@@ -422,24 +464,41 @@ async function runNonStreamingPI({ finalUserMessage, agentId, sessionId, userId,
             if (data.type === 'text_delta' && data.delta) {
               fullContent += data.delta;
             }
-          } catch (e) { /* skip */ }
+          } catch (e) {
+            /* skip */
+          }
         }
       }
     }
 
-    const fileLinks = await buildFileLinks(fullContent, agentId, sessionId, userId, streamStartTime);
+    const fileLinks = await buildFileLinks(
+      fullContent,
+      agentId,
+      sessionId,
+      userId,
+      streamStartTime,
+    );
     const finalContent = fileLinks ? fullContent + fileLinks : fullContent;
+    // Staged for the PI bypass persistence layer (piPersistence): on bypass
+    // paths pi persists the message documents, and this footer is synthesized
+    // on the arp side AFTER pi's writes, so it must be appended back to the
+    // persisted message by the caller.
+    if (fileLinks) {
+      req._piStreamedFileFooter = fileLinks;
+    }
 
     return res.json({
       id: 'chatcmpl-pi-' + Date.now(),
       object: 'chat.completion',
       created: Math.floor(Date.now() / 1000),
       model: 'one-pi',
-      choices: [{
-        index: 0,
-        message: { role: 'assistant', content: finalContent },
-        finish_reason: 'stop',
-      }],
+      choices: [
+        {
+          index: 0,
+          message: { role: 'assistant', content: finalContent },
+          finish_reason: 'stop',
+        },
+      ],
       usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
     });
   } catch (error) {
@@ -448,7 +507,21 @@ async function runNonStreamingPI({ finalUserMessage, agentId, sessionId, userId,
   }
 }
 
-async function streamFromPI({ res, chatId, created, finalUserMessage, agentId, sessionId, userId, streamStartTime, systemPrompt, userMessageId, responseMessageId, parentMessageId }) {
+async function streamFromPI({
+  req,
+  res,
+  chatId,
+  created,
+  finalUserMessage,
+  agentId,
+  sessionId,
+  userId,
+  streamStartTime,
+  systemPrompt,
+  userMessageId,
+  responseMessageId,
+  parentMessageId,
+}) {
   setSseHeaders(res);
   writeSseChunk(res, buildChunk(chatId, created, { role: 'assistant', content: '' }));
 
@@ -481,7 +554,9 @@ async function streamFromPI({ res, chatId, created, finalUserMessage, agentId, s
         clearInterval(heartbeatInterval);
         heartbeatInterval = null;
       }
-      console.log(`[PI Chat] Client disconnected (stopping stream read), session ${sessionId}. PI generation continues for resume support.`);
+      console.log(
+        `[PI Chat] Client disconnected (stopping stream read), session ${sessionId}. PI generation continues for resume support.`,
+      );
     }
   });
 
@@ -570,9 +645,12 @@ async function streamFromPI({ res, chatId, created, finalUserMessage, agentId, s
                 argsDisplay = String(data.args).substring(0, 200);
               }
             }
-            writeSseChunk(res, buildChunk(chatId, created, {
-              reasoning_content: `\n🔧 调用 ${toolName} ${argsDisplay}\n`,
-            }));
+            writeSseChunk(
+              res,
+              buildChunk(chatId, created, {
+                reasoning_content: `\n🔧 调用 ${toolName} ${argsDisplay}\n`,
+              }),
+            );
             continue;
           }
 
@@ -597,7 +675,10 @@ async function streamFromPI({ res, chatId, created, finalUserMessage, agentId, s
 
           if (currentEvent === 'tool_end') {
             const toolName = data.toolName || 'unknown';
-            writeSseChunk(res, buildChunk(chatId, created, { reasoning_content: `✅ ${toolName} 完成\n` }));
+            writeSseChunk(
+              res,
+              buildChunk(chatId, created, { reasoning_content: `✅ ${toolName} 完成\n` }),
+            );
             continue;
           }
 
@@ -617,34 +698,49 @@ async function streamFromPI({ res, chatId, created, finalUserMessage, agentId, s
     }
 
     if (piUsage) {
-      res.write('data: ' + JSON.stringify({
-        id: chatId,
-        object: 'chat.completion.chunk',
-        created,
-        model: 'one-pi',
-        choices: [],
-        usage: {
-          prompt_tokens: piUsage.prompt_tokens || 0,
-          completion_tokens: piUsage.completion_tokens || 0,
-          total_tokens: piUsage.total_tokens || 0,
-          cache_read_tokens: piUsage.cache_read_tokens || 0,
-          cache_write_tokens: piUsage.cache_write_tokens || 0,
-          // Turn-cumulative counters from pi (ignored by LangChain, kept for
-          // direct consumers of this SSE stream; the pi backend persists the
-          // authoritative values on the message documents itself)
-          totalInputTokens: piUsage.totalInputTokens || 0,
-          totalOutputTokens: piUsage.totalOutputTokens || 0,
-          totalCacheReadTokens: piUsage.totalCacheReadTokens || 0,
-          totalCacheWriteTokens: piUsage.totalCacheWriteTokens || 0,
-        },
-      }) + '\n\n');
+      res.write(
+        'data: ' +
+          JSON.stringify({
+            id: chatId,
+            object: 'chat.completion.chunk',
+            created,
+            model: 'one-pi',
+            choices: [],
+            usage: {
+              prompt_tokens: piUsage.prompt_tokens || 0,
+              completion_tokens: piUsage.completion_tokens || 0,
+              total_tokens: piUsage.total_tokens || 0,
+              cache_read_tokens: piUsage.cache_read_tokens || 0,
+              cache_write_tokens: piUsage.cache_write_tokens || 0,
+              // Turn-cumulative counters from pi (ignored by LangChain, kept for
+              // direct consumers of this SSE stream; the pi backend persists the
+              // authoritative values on the message documents itself)
+              totalInputTokens: piUsage.totalInputTokens || 0,
+              totalOutputTokens: piUsage.totalOutputTokens || 0,
+              totalCacheReadTokens: piUsage.totalCacheReadTokens || 0,
+              totalCacheWriteTokens: piUsage.totalCacheWriteTokens || 0,
+            },
+          }) +
+          '\n\n',
+      );
       if (typeof res.flush === 'function') {
         res.flush();
       }
     }
 
-    const fileLinks = await buildFileLinks(piFullContent, agentId, sessionId, userId, streamStartTime);
+    const fileLinks = await buildFileLinks(
+      piFullContent,
+      agentId,
+      sessionId,
+      userId,
+      streamStartTime,
+    );
     if (fileLinks) {
+      // Staged for the PI bypass persistence layer (piPersistence): on bypass
+      // paths pi persists the message documents, and this footer is synthesized
+      // on the arp side AFTER pi's writes, so it must be appended back to the
+      // persisted message by the caller.
+      req._piStreamedFileFooter = fileLinks;
       writeSseChunk(res, buildChunk(chatId, created, { content: fileLinks }));
     }
 
@@ -657,7 +753,10 @@ async function streamFromPI({ res, chatId, created, finalUserMessage, agentId, s
       heartbeatInterval = null;
     }
     console.error('[PI Chat] Stream error:', error.message);
-    writeSseChunk(res, buildChunk(chatId, created, { content: '\nStream error: ' + error.message }));
+    writeSseChunk(
+      res,
+      buildChunk(chatId, created, { content: '\nStream error: ' + error.message }),
+    );
     res.write('data: [DONE]\n\n');
     res.end();
   }
@@ -692,8 +791,7 @@ const piChatCompletionsController = async (req, res) => {
   // buildPiForwardHeaders (initialize.ts) or the body `user` field. Falling
   // back to 'system' would list pi's per-user workspace as the wrong user →
   // empty file listing → no download links.
-  const userId =
-    req.user?.id || req.headers['x-user-id'] || user || 'system';
+  const userId = req.user?.id || req.headers['x-user-id'] || user || 'system';
   const model = req.body.model || 'one-pi';
   const appConfig = await getAppConfig();
   const endpointConfig = getCustomEndpointConfig({ endpoint: 'pi', appConfig });
@@ -725,6 +823,7 @@ const piChatCompletionsController = async (req, res) => {
 
   if (!stream) {
     return runNonStreamingPI({
+      req,
       finalUserMessage: userMessage,
       agentId,
       sessionId,
@@ -742,6 +841,7 @@ const piChatCompletionsController = async (req, res) => {
   const created = Math.floor(Date.now() / 1000);
 
   return streamFromPI({
+    req,
     res,
     chatId,
     created,
