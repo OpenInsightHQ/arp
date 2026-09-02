@@ -15,7 +15,7 @@ const { findAccessibleResourceIds } = require('~/server/services/aclPrincipals')
  *
  * Lists bindable credential resources (skills + MCP servers declaring
  * requiresCredentials/userManaged), bound with the user's own encrypted
- * credentials in the shared `skillcredentials` collection (cipher interop
+ * credentials in the shared `credentials` collection (cipher interop
  * with pi/dmp — see packages/data-schemas/src/methods/skillCredential.ts).
  */
 

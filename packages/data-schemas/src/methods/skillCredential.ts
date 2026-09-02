@@ -145,7 +145,8 @@ export function createSkillCredentialMethods(mongoose: typeof import('mongoose')
     const doc = await getModel()
       .findOne(ownerFilter(userId, resourceType, resourceName))
       .lean<ISkillCredential | null>();
-    if (!doc) {
+    // Declaration-only docs (no cipher data) count as unbound.
+    if (!doc || !doc.data) {
       return null;
     }
     try {
