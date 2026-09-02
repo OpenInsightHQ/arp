@@ -225,6 +225,54 @@ export type CredentialsListResponse = {
   cryptoConfigured: boolean;
 };
 
+/* Skills catalog */
+export type TSkillsCatalogItem = {
+  id: string;
+  resourceType: 'skill' | 'mcp';
+  source: 'created' | 'authorized';
+  name: string;
+  displayName?: string;
+  description?: string;
+  category?: string;
+  skillType?: string;
+  status?: number;
+  requiresCredentials: boolean;
+  userManaged: boolean;
+  credentialSchema: TCredentialSchemaField[];
+  apiCount?: number;
+  baseUrl?: string;
+  serverUrl?: string;
+  bound?: boolean;
+};
+
+export type SkillsCatalogResponse = {
+  items: TSkillsCatalogItem[];
+};
+
+export type CreateHttpSkillPayload = {
+  name: string;
+  description: string;
+  category?: string;
+  baseUrl?: string;
+  apis?: string;
+  requiresCredentials?: boolean;
+  userManaged?: boolean;
+  credentialSchema?: string;
+  credentialBinding?: string;
+};
+
+export type TestConnectionPayload = {
+  type?: 'http' | 'mcp';
+  url: string;
+  headers?: Record<string, string>;
+};
+
+export type TestConnectionResponse = {
+  ok: boolean;
+  message?: string;
+  status?: number;
+};
+
 export type PrincipalSearchParams = {
   q: string;
   limit?: number;

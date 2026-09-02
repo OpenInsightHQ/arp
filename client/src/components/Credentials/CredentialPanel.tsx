@@ -4,12 +4,12 @@ import { Spinner, useToastContext } from '@librechat/client';
 import type { TCredentialResource } from 'librechat-data-provider';
 import {
   useCredentialResourcesQuery,
-  useBindCredentialMutation,
   useUnbindCredentialMutation,
   useVerifyCredentialMutation,
 } from '~/data-provider';
 import { useLocalize } from '~/hooks';
 import { cn } from '~/utils';
+import BindCredentialDialog from './BindCredentialDialog';
 
 export default function CredentialPanel() {
   const localize = useLocalize();
@@ -17,24 +17,12 @@ export default function CredentialPanel() {
 
   const [filter, setFilter] = useState('');
   const [binding, setBinding] = useState<TCredentialResource | null>(null);
-  const [values, setValues] = useState<Record<string, string>>({});
 
   const { data, isLoading } = useCredentialResourcesQuery();
 
   const invalidateAndToast = (message: string, status: 'success' | 'error') => {
     showToast({ message, status });
   };
-
-  const bindMutation = useBindCredentialMutation({
-    onSuccess: () => {
-      invalidateAndToast(localize('com_ui_credential_bound'), 'success');
-      setBinding(null);
-      setValues({});
-    },
-    onError: (error) => {
-      invalidateAndToast(error.message || localize('com_ui_credential_bind_failed'), 'error');
-    },
-  });
 
   const unbindMutation = useUnbindCredentialMutation({
     onSuccess: () => invalidateAndToast(localize('com_ui_credential_unbound'), 'success'),
@@ -94,29 +82,6 @@ export default function CredentialPanel() {
 
   const openBindDialog = (resource: TCredentialResource) => {
     setBinding(resource);
-    setValues({});
-  };
-
-  const submitBind = () => {
-    if (!binding) {
-      return;
-    }
-    const missing = (binding.credentialSchema || []).filter((f) => !values[f.secretKey]?.trim());
-    if (missing.length > 0) {
-      showToast({
-        message:
-          localize('com_ui_credential_missing_fields') +
-          ': ' +
-          missing.map((f) => f.displayName || f.secretKey).join(', '),
-        status: 'error',
-      });
-      return;
-    }
-    bindMutation.mutate({
-      resourceType: binding.resourceType,
-      resourceName: binding.resourceName,
-      values,
-    });
   };
 
   return (
@@ -240,60 +205,13 @@ export default function CredentialPanel() {
       )}
 
       {binding && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4">
-          <div className="w-full max-w-md rounded-xl bg-background p-4 shadow-2xl">
-            <h3 className="mb-3 text-base font-medium text-text-primary">
-              {localize('com_ui_credential_bind_title', {
-                0: binding.displayName || binding.resourceName,
-              })}
-            </h3>
-            <div className="flex flex-col gap-3">
-              {(binding.credentialSchema || []).length === 0 && (
-                <div className="rounded-lg border border-orange-500/40 bg-orange-500/10 p-2 text-xs text-orange-600 dark:text-orange-400">
-                  {localize('com_ui_credential_no_schema')}
-                </div>
-              )}
-              {(binding.credentialSchema || []).map((field) => (
-                <label key={field.secretKey} className="flex flex-col gap-1">
-                  <span className="text-xs font-medium text-text-primary">
-                    {field.displayName || field.secretKey}
-                  </span>
-                  <input
-                    type={field.sensitive !== false ? 'password' : 'text'}
-                    value={values[field.secretKey] ?? ''}
-                    onChange={(e) =>
-                      setValues((prev) => ({ ...prev, [field.secretKey]: e.target.value }))
-                    }
-                    placeholder={field.description || field.secretKey}
-                    autoComplete="off"
-                    className="w-full rounded-lg border border-border-light bg-transparent px-3 py-2 text-sm text-text-primary placeholder:text-text-secondary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-heavy"
-                  />
-                </label>
-              ))}
-            </div>
-            <div className="mt-4 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setBinding(null);
-                  setValues({});
-                }}
-                className="rounded-lg border border-border-light px-3 py-1.5 text-sm text-text-primary transition-colors hover:bg-surface-hover"
-              >
-                {localize('com_ui_cancel')}
-              </button>
-              <button
-                type="button"
-                disabled={bindMutation.isLoading}
-                onClick={submitBind}
-                className="flex items-center gap-1.5 rounded-lg bg-surface-submit px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-surface-submit-hover disabled:opacity-50"
-              >
-                {bindMutation.isLoading && <Spinner className="size-4" />}
-                {localize('com_ui_confirm')}
-              </button>
-            </div>
-          </div>
-        </div>
+        <BindCredentialDialog
+          resourceType={binding.resourceType}
+          resourceName={binding.resourceName}
+          displayName={binding.displayName}
+          credentialSchema={binding.credentialSchema || []}
+          onClose={() => setBinding(null)}
+        />
       )}
     </div>
   );

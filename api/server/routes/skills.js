@@ -3,6 +3,11 @@ const multer = require('multer');
 const JSZip = require('jszip');
 const { requireJwtAuth } = require('../middleware/');
 const { safeHttpStatus } = require('~/server/utils/sanitize');
+const {
+  getSkillsCatalog,
+  createHttpSkill,
+  testSkillConnection,
+} = require('~/server/controllers/skillsCatalog');
 
 const router = express.Router();
 
@@ -88,20 +93,23 @@ const parseSkillMarkdown = (content = '') => {
   };
 
   const normalizeParameterKey = (key) => {
-    const normalized = key.trim().replace(/[：:]+$/, '').toLowerCase();
+    const normalized = key
+      .trim()
+      .replace(/[：:]+$/, '')
+      .toLowerCase();
     const map = {
-      '参数名': '参数',
-      'name': '参数',
-      'parameter': '参数',
-      '参数': '参数',
-      '类型': '类型',
-      'type': '类型',
-      '必需': '必需',
-      'required': '必需',
-      '是否必需': '必需',
-      '说明': '说明',
-      '描述': '说明',
-      'description': '说明',
+      参数名: '参数',
+      name: '参数',
+      parameter: '参数',
+      参数: '参数',
+      类型: '类型',
+      type: '类型',
+      必需: '必需',
+      required: '必需',
+      是否必需: '必需',
+      说明: '说明',
+      描述: '说明',
+      description: '说明',
     };
     return map[normalized] || key.trim();
   };
@@ -187,12 +195,11 @@ const buildSkillDetail = async ({ skillName, user }) => {
   const buffer = Buffer.from(await response.arrayBuffer());
   const zip = await JSZip.loadAsync(buffer);
   const entries = Object.values(zip.files);
-  const rootCandidates = entries
-    .map((entry) => entry.name.split('/')[0])
-    .filter(Boolean);
-  const rootName = rootCandidates.length > 0 && rootCandidates.every((root) => root === rootCandidates[0])
-    ? rootCandidates[0]
-    : skillName.replace(/\/$/, '');
+  const rootCandidates = entries.map((entry) => entry.name.split('/')[0]).filter(Boolean);
+  const rootName =
+    rootCandidates.length > 0 && rootCandidates.every((root) => root === rootCandidates[0])
+      ? rootCandidates[0]
+      : skillName.replace(/\/$/, '');
   const rootPrefix = `${rootName}/`;
   const stripRoot = (name) => (name.startsWith(rootPrefix) ? name.slice(rootPrefix.length) : name);
   const fileEntries = entries
@@ -248,6 +255,15 @@ const buildSkillDetail = async ({ skillName, user }) => {
 };
 
 router.use(requireJwtAuth);
+
+/** GET /api/skills/catalog?type=http|mcp|skill&source=created|authorized|all */
+router.get('/catalog', getSkillsCatalog);
+
+/** POST /api/skills/create-http — create a personal http-type skill */
+router.post('/create-http', createHttpSkill);
+
+/** POST /api/skills/test-connection — probe http url or MCP handshake */
+router.post('/test-connection', testSkillConnection);
 
 router.get('/my', async (req, res) => {
   try {
@@ -344,7 +360,9 @@ router.get('/my/:skillName', async (req, res) => {
         const data = await response.json();
         return res.status(safeHttpStatus(response.status)).json(data);
       }
-      return res.status(safeHttpStatus(response.status)).json({ error: 'Failed to download skill' });
+      return res
+        .status(safeHttpStatus(response.status))
+        .json({ error: 'Failed to download skill' });
     }
 
     const contentDisposition = response.headers.get('content-disposition');

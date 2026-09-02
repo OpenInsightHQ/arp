@@ -1311,6 +1311,24 @@ export const verifyCredential = (resourceType: string, resourceName: string): Pr
   return request.post(endpoints.credentialVerify(resourceType, resourceName));
 };
 
+/* Skills catalog */
+export const getSkillsCatalog = (
+  type?: string,
+  source?: string,
+): Promise<q.SkillsCatalogResponse> => {
+  return request.get(endpoints.skillsCatalog(), { params: { type, source } });
+};
+
+export const createHttpSkill = (payload: q.CreateHttpSkillPayload): Promise<unknown> => {
+  return request.post(endpoints.skillsCreateHttp(), payload);
+};
+
+export const testSkillConnection = (
+  payload: q.TestConnectionPayload,
+): Promise<q.TestConnectionResponse> => {
+  return request.post(endpoints.skillsTestConnection(), payload);
+};
+
 export function searchPrincipals(
   params: q.PrincipalSearchParams,
 ): Promise<q.PrincipalSearchResponse> {

@@ -97,6 +97,13 @@ export { getMySkills, uploadSkill, downloadSkill, deleteSkill } from './data-ser
 /* Credentials */
 export { getCredentialResources, bindCredential, unbindCredential, verifyCredential } from './data-service';
 
+/* Skills catalog */
+export {
+  getSkillsCatalog,
+  createHttpSkill,
+  testSkillConnection,
+} from './data-service';
+
 /* File Management API */
 export {
   listFiles,

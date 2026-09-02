@@ -54,6 +54,7 @@ export enum QueryKeys {
   memories = 'memories',
   skills = 'skills',
   credentials = 'credentials',
+  skillsCatalog = 'skillsCatalog',
   galleryArtifacts = 'galleryArtifacts',
   principalSearch = 'principalSearch',
   accessRoles = 'accessRoles',

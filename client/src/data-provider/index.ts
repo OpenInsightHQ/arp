@@ -6,6 +6,8 @@ export * from './Files';
 export * from './Memories';
 /* Skills */
 export * from './Skills';
+/* Credentials */
+export * from './Credentials';
 /* Gallery */
 export * from './Gallery';
 export * from './Messages';

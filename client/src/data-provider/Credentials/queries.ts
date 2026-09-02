@@ -82,3 +82,53 @@ export const useVerifyCredentialMutation = (
     },
   );
 };
+
+/* Skills catalog */
+import type {
+  SkillsCatalogResponse,
+  CreateHttpSkillPayload,
+  TestConnectionPayload,
+  TestConnectionResponse,
+} from 'librechat-data-provider';
+
+export const useSkillsCatalogQuery = (
+  type: string,
+  source: string,
+  config?: UseQueryOptions<SkillsCatalogResponse>,
+): QueryObserverResult<SkillsCatalogResponse> => {
+  return useQuery<SkillsCatalogResponse>(
+    [QueryKeys.skillsCatalog, type, source],
+    () => dataService.getSkillsCatalog(type, source),
+    {
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+      refetchOnMount: false,
+      ...config,
+    },
+  );
+};
+
+export const useCreateHttpSkillMutation = (
+  options?: UseMutationOptions<unknown, Error, CreateHttpSkillPayload>,
+) => {
+  const queryClient = useQueryClient();
+  return useMutation<unknown, Error, CreateHttpSkillPayload>(
+    (payload) => dataService.createHttpSkill(payload),
+    {
+      ...options,
+      onSuccess: (...params) => {
+        queryClient.invalidateQueries([QueryKeys.skillsCatalog]);
+        options?.onSuccess?.(...params);
+      },
+    },
+  );
+};
+
+export const useTestSkillConnectionMutation = (
+  options?: UseMutationOptions<TestConnectionResponse, Error, TestConnectionPayload>,
+) => {
+  return useMutation<TestConnectionResponse, Error, TestConnectionPayload>(
+    (payload) => dataService.testSkillConnection(payload),
+    options,
+  );
+};

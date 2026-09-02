@@ -440,6 +440,11 @@ export const credentialByName = (resourceType: string, resourceName: string) =>
   `${BASE_URL}/api/credential/${resourceType}/${encodeURIComponent(resourceName)}`;
 export const credentialVerify = (resourceType: string, resourceName: string) =>
   `${BASE_URL}/api/credential/${resourceType}/${encodeURIComponent(resourceName)}/verify`;
+
+/* Skills catalog */
+export const skillsCatalog = () => `${BASE_URL}/api/skills/catalog`;
+export const skillsCreateHttp = () => `${BASE_URL}/api/skills/create-http`;
+export const skillsTestConnection = () => `${BASE_URL}/api/skills/test-connection`;
 export const skillDetail = (skillName: string) =>
   `${skillByName(skillName)}/detail`;
 
