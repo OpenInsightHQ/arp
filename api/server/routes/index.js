@@ -30,6 +30,7 @@ const keys = require('./keys');
 const user = require('./user');
 const skills = require('./skills');
 const mcp = require('./mcp');
+const credential = require('./credential');
 const taskQueue = require('./taskQueue');
 
 module.exports = {
@@ -66,4 +67,5 @@ module.exports = {
   staticRoute,
   accessPermissions,
   taskQueue,
+  credential,
 };

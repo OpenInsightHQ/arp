@@ -28,6 +28,8 @@ export * from './systemPrompt';
 /* Access Control */
 export * from './accessRole';
 export * from './aclEntry';
+/* Skill Credentials */
+export * from './skillCredential';
 export * from './group';
 /* Web */
 export * from './web';

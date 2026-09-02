@@ -1,6 +1,6 @@
 import { useState, memo, useRef } from 'react';
 import * as Select from '@ariakit/react/select';
-import { Database, LogOut, Sparkles, MessageSquareQuote } from 'lucide-react';
+import { Database, KeyRound, LogOut, Sparkles, MessageSquareQuote } from 'lucide-react';
 import { LinkIcon, GearIcon, DropdownMenuSeparator, Avatar } from '@librechat/client';
 import { useGetStartupConfig, useGetUserBalance } from '~/data-provider';
 import { useAuthContext } from '~/hooks/AuthContext';
@@ -9,6 +9,7 @@ import Settings from './Settings';
 import MemoryModal from './MemoryModal';
 import SkillModal from './SkillModal';
 import PromptModal from './PromptModal';
+import CredentialModal from './CredentialModal';
 
 function AccountSettings() {
   const localize = useLocalize();
@@ -21,6 +22,7 @@ function AccountSettings() {
   const [showMemory, setShowMemory] = useState(false);
   const [showSkills, setShowSkills] = useState(false);
   const [showPrompts, setShowPrompts] = useState(false);
+  const [showCredentials, setShowCredentials] = useState(false);
   const accountSettingsButtonRef = useRef<HTMLButtonElement>(null);
 
   return (
@@ -81,6 +83,14 @@ function AccountSettings() {
         </Select.SelectItem>
         <Select.SelectItem
           value=""
+          onClick={() => setShowCredentials(true)}
+          className="select-item text-sm"
+        >
+          <KeyRound className="icon-md" aria-hidden="true" />
+          {localize('com_nav_my_credentials')}
+        </Select.SelectItem>
+        <Select.SelectItem
+          value=""
           onClick={() => setShowPrompts(true)}
           className="select-item text-sm"
         >
@@ -120,6 +130,9 @@ function AccountSettings() {
       {showMemory && <MemoryModal open={showMemory} onOpenChange={setShowMemory} />}
       {showSkills && <SkillModal open={showSkills} onOpenChange={setShowSkills} />}
       {showPrompts && <PromptModal open={showPrompts} onOpenChange={setShowPrompts} />}
+      {showCredentials && (
+        <CredentialModal open={showCredentials} onOpenChange={setShowCredentials} />
+      )}
     </Select.SelectProvider>
   );
 }

@@ -94,6 +94,9 @@ export {
 /* Skills */
 export { getMySkills, uploadSkill, downloadSkill, deleteSkill } from './data-service';
 
+/* Credentials */
+export { getCredentialResources, bindCredential, unbindCredential, verifyCredential } from './data-service';
+
 /* File Management API */
 export {
   listFiles,

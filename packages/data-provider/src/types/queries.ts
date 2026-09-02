@@ -193,6 +193,38 @@ export type SkillsListResponse = {
   skills: TSkill[];
 };
 
+/* Credentials */
+export type TCredentialSchemaField = {
+  secretKey: string;
+  displayName?: string;
+  sensitive?: boolean;
+  description?: string;
+};
+
+export type TCredentialResource = {
+  resourceType: 'skill' | 'mcp';
+  resourceName: string;
+  displayName?: string;
+  description?: string;
+  skillType?: string;
+  userManaged: boolean;
+  credentialSchema: TCredentialSchemaField[];
+  bound: boolean;
+  status?: {
+    resourceType: string;
+    resourceName: string;
+    configured: boolean;
+    status?: 'active' | 'invalid';
+    lastVerifiedAt?: string | null;
+    updatedAt?: string | null;
+  };
+};
+
+export type CredentialsListResponse = {
+  resources: TCredentialResource[];
+  cryptoConfigured: boolean;
+};
+
 export type PrincipalSearchParams = {
   q: string;
   limit?: number;

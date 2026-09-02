@@ -200,6 +200,7 @@ const startServer = async () => {
   app.use('/api/mcp', routes.mcp);
   app.use('/api/pi', require('./routes/pi'));
   app.use('/api/task-queue', routes.taskQueue);
+  app.use('/api/credential', routes.credential);
 
   /* /arp prefixed API Endpoints */
   app.use('/arp/api/task-queue', routes.taskQueue);
@@ -236,6 +237,7 @@ const startServer = async () => {
   app.use('/arp/api/tags', routes.tags);
   app.use('/arp/api/mcp', routes.mcp);
   app.use('/arp/api/pi', require('./routes/pi'));
+  app.use('/arp/api/credential', routes.credential);
 
   app.use(ErrorController);
 

@@ -433,6 +433,13 @@ export const skillsMy = () => `${BASE_URL}/api/skills/my`;
 export const skillUpload = () => `${BASE_URL}/api/skills/my/upload`;
 export const skillByName = (skillName: string) =>
   `${BASE_URL}/api/skills/my/${encodeURIComponent(skillName)}`;
+
+/* Credentials */
+export const credentials = () => `${BASE_URL}/api/credential`;
+export const credentialByName = (resourceType: string, resourceName: string) =>
+  `${BASE_URL}/api/credential/${resourceType}/${encodeURIComponent(resourceName)}`;
+export const credentialVerify = (resourceType: string, resourceName: string) =>
+  `${BASE_URL}/api/credential/${resourceType}/${encodeURIComponent(resourceName)}/verify`;
 export const skillDetail = (skillName: string) =>
   `${skillByName(skillName)}/detail`;
 

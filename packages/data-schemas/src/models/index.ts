@@ -29,6 +29,7 @@ import { createMemoryModel } from './memory';
 import { createAccessRoleModel } from './accessRole';
 import { createAclEntryModel } from './aclEntry';
 import { createGroupModel } from './group';
+import { createSkillCredentialModel } from './skillCredential';
 
 /**
  * Creates all database models for all collections
@@ -66,6 +67,7 @@ export function createModels(mongoose: typeof import('mongoose')) {
     AccessRole: createAccessRoleModel(mongoose),
     AclEntry: createAclEntryModel(mongoose),
     Group: createGroupModel(mongoose),
+    SkillCredential: createSkillCredentialModel(mongoose),
   };
 }
 

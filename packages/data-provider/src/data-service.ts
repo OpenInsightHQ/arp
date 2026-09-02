@@ -1290,6 +1290,27 @@ export const deleteSkill = (skillName: string): Promise<void> => {
   return request.delete(endpoints.skillByName(skillName));
 };
 
+/* Credentials */
+export const getCredentialResources = (): Promise<q.CredentialsListResponse> => {
+  return request.get(endpoints.credentials());
+};
+
+export const bindCredential = (
+  resourceType: string,
+  resourceName: string,
+  values: Record<string, string>,
+): Promise<unknown> => {
+  return request.put(endpoints.credentialByName(resourceType, resourceName), { values });
+};
+
+export const unbindCredential = (resourceType: string, resourceName: string): Promise<unknown> => {
+  return request.delete(endpoints.credentialByName(resourceType, resourceName));
+};
+
+export const verifyCredential = (resourceType: string, resourceName: string): Promise<unknown> => {
+  return request.post(endpoints.credentialVerify(resourceType, resourceName));
+};
+
 export function searchPrincipals(
   params: q.PrincipalSearchParams,
 ): Promise<q.PrincipalSearchResponse> {
