@@ -16,7 +16,7 @@ const MASTER_KEY_ENV = 'PI_CREDENTIAL_MASTER_KEY';
  * Skill credential methods with AES-256-GCM encryption.
  *
  * Cipher interop with pi (Node) and dmp (Java): 12-byte random IV, 128-bit
- * tag stored SEPARATELY from the ciphertext — Node's createCipheriv emits
+ * tag stored SEPARATELY from the ciphertext ??Node's createCipheriv emits
  * them separately, Java's doFinal concatenates ciphertext||tag and splits.
  * Plaintext is the JSON object `{ secretKey: value }`.
  *
@@ -24,7 +24,14 @@ const MASTER_KEY_ENV = 'PI_CREDENTIAL_MASTER_KEY';
  * (server-internal use only). Listing endpoints use `getCredentialStatus`.
  */
 export function createSkillCredentialMethods(mongoose: typeof import('mongoose')) {
-  const SkillCredential = mongoose.models.SkillCredential as Model<ISkillCredential>;
+  /**
+   * Lazy model resolution ??matches the repo convention (see aclEntry.ts):
+   * models may not be registered yet when createMethods() runs, so resolve
+   * per call instead of capturing at factory time.
+   */
+  function getModel(): Model<ISkillCredential> {
+    return mongoose.models.SkillCredential as Model<ISkillCredential>;
+  }
 
   let warnedAboutKey = false;
   function getMasterKey(): Buffer | null {
@@ -97,7 +104,7 @@ export function createSkillCredentialMethods(mongoose: typeof import('mongoose')
       throw new Error('Credential values must not be empty');
     }
     const encrypted = encryptValues(values, key);
-    await SkillCredential.updateOne(
+    await getModel().updateOne(
       ownerFilter(userId, resourceType, resourceName),
       {
         $set: {
@@ -120,12 +127,11 @@ export function createSkillCredentialMethods(mongoose: typeof import('mongoose')
     resourceType: CredentialResourceType,
     resourceName: string,
   ): Promise<void> {
-    await SkillCredential.deleteOne(ownerFilter(userId, resourceType, resourceName));
+    await getModel().deleteOne(ownerFilter(userId, resourceType, resourceName));
   }
 
   /**
-   * Decrypts and returns the user's binding values (server-internal only —
-   * never expose via HTTP APIs).
+   * Decrypts and returns the user's binding values (server-internal only ??   * never expose via HTTP APIs).
    */
   async function getCredentialValues(
     userId: string,
@@ -136,9 +142,9 @@ export function createSkillCredentialMethods(mongoose: typeof import('mongoose')
     if (!key) {
       return null;
     }
-    const doc = await SkillCredential.findOne(
-      ownerFilter(userId, resourceType, resourceName),
-    ).lean<ISkillCredential | null>();
+    const doc = await getModel()
+      .findOne(ownerFilter(userId, resourceType, resourceName))
+      .lean<ISkillCredential | null>();
     if (!doc) {
       return null;
     }
@@ -153,27 +159,28 @@ export function createSkillCredentialMethods(mongoose: typeof import('mongoose')
     }
   }
 
-  /** Whether the user has a binding (no decryption — safe for status endpoints). */
+  /** Whether the user has a binding (no decryption ??safe for status endpoints). */
   async function isCredentialBound(
     userId: string,
     resourceType: CredentialResourceType,
     resourceName: string,
   ): Promise<boolean> {
-    const doc = await SkillCredential.findOne(ownerFilter(userId, resourceType, resourceName))
+    const doc = await getModel()
+      .findOne(ownerFilter(userId, resourceType, resourceName))
       .select('_id')
       .lean();
     return doc != null;
   }
 
-  /** Sanitized binding view — cipher fields never included. */
+  /** Sanitized binding view ??cipher fields never included. */
   async function getCredentialStatus(
     userId: string,
     resourceType: CredentialResourceType,
     resourceName: string,
   ): Promise<SkillCredentialStatus> {
-    const doc = await SkillCredential.findOne(
-      ownerFilter(userId, resourceType, resourceName),
-    ).lean<ISkillCredential | null>();
+    const doc = await getModel()
+      .findOne(ownerFilter(userId, resourceType, resourceName))
+      .lean<ISkillCredential | null>();
     return {
       resourceType,
       resourceName,
@@ -191,7 +198,7 @@ export function createSkillCredentialMethods(mongoose: typeof import('mongoose')
     resourceName: string,
     status: CredentialStatus,
   ): Promise<void> {
-    await SkillCredential.updateOne(ownerFilter(userId, resourceType, resourceName), {
+    await getModel().updateOne(ownerFilter(userId, resourceType, resourceName), {
       $set: { status, lastVerifiedAt: new Date() },
     });
   }
