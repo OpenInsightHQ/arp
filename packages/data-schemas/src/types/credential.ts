@@ -6,7 +6,7 @@ export const ADMIN_CREDENTIAL_USER_ID = '000000000000000000000000';
 export type CredentialResourceType = 'skill' | 'mcp';
 export type CredentialStatus = 'active' | 'invalid';
 
-/** One declared secret field (declaration only — values live encrypted in ISkillCredential) */
+/** One declared secret field (declaration only — values live encrypted in ICredential) */
 export interface ICredentialSchemaField {
   secretKey: string;
   displayName?: string;
@@ -23,7 +23,7 @@ export interface ICredentialSchemaField {
  * object `{ secretKey: value }`. Master key: base64 32-byte, env
  * `PI_CREDENTIAL_MASTER_KEY`.
  */
-export interface ISkillCredential {
+export interface ICredential {
   _id: mongoose.Types.ObjectId;
   userId: mongoose.Types.ObjectId;
   resourceType: CredentialResourceType;
@@ -36,12 +36,17 @@ export interface ISkillCredential {
   keyVersion?: number;
   lastVerifiedAt?: Date | null;
   status?: CredentialStatus;
+  /**
+   * Plaintext credential-schema JSON — only used by declaration-only docs
+   * (resourceType=credential) so bind forms can render without decrypting.
+   */
+  schemaJson?: string;
   createdAt?: Date;
   updatedAt?: Date;
 }
 
 /** Sanitized binding view for listing endpoints — never contains cipher material */
-export interface SkillCredentialStatus {
+export interface CredentialStatusView {
   resourceType: CredentialResourceType;
   resourceName: string;
   configured: boolean;

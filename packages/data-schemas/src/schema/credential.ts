@@ -1,5 +1,5 @@
 import { Schema } from 'mongoose';
-import type { ISkillCredential } from '~/types';
+import type { ICredential } from '~/types';
 
 /**
  * Collection is named explicitly `credentials` (shared with pi/dmp) — the
@@ -9,7 +9,7 @@ import type { ISkillCredential } from '~/types';
  * declared by an admin, values pending) carry `schemaJson` without cipher
  * material. Resolution skips docs without `data`.
  */
-const skillCredentialSchema = new Schema<ISkillCredential>(
+const credentialSchema = new Schema<ICredential>(
   {
     userId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
     resourceType: { type: String, enum: ['skill', 'mcp', 'credential'], required: true },
@@ -26,6 +26,6 @@ const skillCredentialSchema = new Schema<ISkillCredential>(
   { timestamps: true },
 );
 
-skillCredentialSchema.index({ userId: 1, resourceType: 1, resourceName: 1 }, { unique: true });
+credentialSchema.index({ userId: 1, resourceType: 1, resourceName: 1 }, { unique: true });
 
-export default skillCredentialSchema;
+export default credentialSchema;

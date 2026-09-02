@@ -1922,8 +1922,8 @@
   "com_arp_type_file": "File",
   "com_ui_tab_task": "Tasks",
   "com_task_section_ai": "AI Pending Tasks",
-  "com_task_section_collab": "Collaboration Requests",
-  "com_task_section_manual": "My Tasks",
+  "com_task_section_collab": "Collaboration Tasks",
+  "com_task_section_manual": "Manual Tasks",
   "com_task_status_pending": "Pending",
   "com_task_status_completed": "Completed",
   "com_task_status_approved": "Approved",
@@ -1937,8 +1937,6 @@
   "com_task_all_clear_hint": "No pending tasks right now. Your AI agents will notify you when they need your input.",
   "com_task_section_my_ai": "My AI Tasks",
   "com_task_section_other_ai": "AI Tasks from Others",
-  "com_task_section_collab": "Collaboration Tasks",
-  "com_task_section_manual": "Manual Tasks",
   "com_task_jump_conversation": "Go to Conversation",
   "com_task_respond": "Respond",
   "com_task_view_result": "View Result",
@@ -1953,5 +1951,7 @@
   "com_just_now": "just now",
   "com_min_ago": "min ago",
   "com_hour_ago": "hr ago",
-  "com_day_ago": "days ago"
+  "com_day_ago": "days ago",
+  "com_ui_credential_type_credential": "Credential",
+  "com_ui_credential_ref_desc": "Referenced by skills - bind your own values"
 }

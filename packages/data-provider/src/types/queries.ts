@@ -202,7 +202,7 @@ export type TCredentialSchemaField = {
 };
 
 export type TCredentialResource = {
-  resourceType: 'skill' | 'mcp';
+  resourceType: 'skill' | 'mcp' | 'credential';
   resourceName: string;
   displayName?: string;
   description?: string;

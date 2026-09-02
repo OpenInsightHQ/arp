@@ -3,8 +3,8 @@ import type { Model, FilterQuery } from 'mongoose';
 import type {
   CredentialResourceType,
   CredentialStatus,
-  ISkillCredential,
-  SkillCredentialStatus,
+  ICredential,
+  CredentialStatusView,
 } from '~/types';
 import { ADMIN_CREDENTIAL_USER_ID } from '~/types';
 
@@ -23,14 +23,14 @@ const MASTER_KEY_ENV = 'PI_CREDENTIAL_MASTER_KEY';
  * Plaintext values never leave this module except via `getCredentialValues`
  * (server-internal use only). Listing endpoints use `getCredentialStatus`.
  */
-export function createSkillCredentialMethods(mongoose: typeof import('mongoose')) {
+export function createCredentialMethods(mongoose: typeof import('mongoose')) {
   /**
    * Lazy model resolution ??matches the repo convention (see aclEntry.ts):
    * models may not be registered yet when createMethods() runs, so resolve
    * per call instead of capturing at factory time.
    */
-  function getModel(): Model<ISkillCredential> {
-    return mongoose.models.SkillCredential as Model<ISkillCredential>;
+  function getModel(): Model<ICredential> {
+    return mongoose.models.Credential as Model<ICredential>;
   }
 
   let warnedAboutKey = false;
@@ -43,7 +43,7 @@ export function createSkillCredentialMethods(mongoose: typeof import('mongoose')
     if (key.length !== 32) {
       if (!warnedAboutKey) {
         console.error(
-          `[SkillCredential] ${MASTER_KEY_ENV} must be base64-encoded 32 bytes (got ${key.length}); credential store disabled`,
+          `[Credential] ${MASTER_KEY_ENV} must be base64-encoded 32 bytes (got ${key.length}); credential store disabled`,
         );
         warnedAboutKey = true;
       }
@@ -68,7 +68,7 @@ export function createSkillCredentialMethods(mongoose: typeof import('mongoose')
     };
   }
 
-  function decryptDoc(doc: ISkillCredential, key: Buffer): Record<string, string> {
+  function decryptDoc(doc: ICredential, key: Buffer): Record<string, string> {
     const decipher = crypto.createDecipheriv(CIPHER, key, Buffer.from(doc.iv, 'base64'));
     decipher.setAuthTag(Buffer.from(doc.authTag, 'base64'));
     const plaintext = Buffer.concat([
@@ -82,7 +82,7 @@ export function createSkillCredentialMethods(mongoose: typeof import('mongoose')
     userId: string,
     resourceType: CredentialResourceType,
     resourceName: string,
-  ): FilterQuery<ISkillCredential> {
+  ): FilterQuery<ICredential> {
     return { userId, resourceType, resourceName };
   }
 
@@ -144,7 +144,7 @@ export function createSkillCredentialMethods(mongoose: typeof import('mongoose')
     }
     const doc = await getModel()
       .findOne(ownerFilter(userId, resourceType, resourceName))
-      .lean<ISkillCredential | null>();
+      .lean<ICredential | null>();
     // Declaration-only docs (no cipher data) count as unbound.
     if (!doc || !doc.data) {
       return null;
@@ -153,7 +153,7 @@ export function createSkillCredentialMethods(mongoose: typeof import('mongoose')
       return decryptDoc(doc, key);
     } catch (error) {
       console.error(
-        `[SkillCredential] decrypt failed for ${resourceType}/${resourceName} (wrong master key or corrupted document):`,
+        `[Credential] decrypt failed for ${resourceType}/${resourceName} (wrong master key or corrupted document):`,
         (error as Error).message,
       );
       return null;
@@ -178,10 +178,10 @@ export function createSkillCredentialMethods(mongoose: typeof import('mongoose')
     userId: string,
     resourceType: CredentialResourceType,
     resourceName: string,
-  ): Promise<SkillCredentialStatus> {
+  ): Promise<CredentialStatusView> {
     const doc = await getModel()
       .findOne(ownerFilter(userId, resourceType, resourceName))
-      .lean<ISkillCredential | null>();
+      .lean<ICredential | null>();
     return {
       resourceType,
       resourceName,
@@ -215,6 +215,6 @@ export function createSkillCredentialMethods(mongoose: typeof import('mongoose')
   };
 }
 
-export type SkillCredentialMethods = ReturnType<typeof createSkillCredentialMethods>;
+export type CredentialMethods = ReturnType<typeof createCredentialMethods>;
 
 export { ADMIN_CREDENTIAL_USER_ID };

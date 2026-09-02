@@ -24,9 +24,9 @@ import { createAclEntryMethods, type AclEntryMethods } from './aclEntry';
 import { createShareMethods, type ShareMethods } from './share';
 /* Skill Credentials */
 import {
-  createSkillCredentialMethods,
-  type SkillCredentialMethods,
-} from './skillCredential';
+  createCredentialMethods,
+  type CredentialMethods,
+} from './credential';
 
 export type AllMethods = UserMethods &
   SessionMethods &
@@ -44,7 +44,7 @@ export type AllMethods = UserMethods &
   ShareMethods &
   AccessRoleMethods &
   PluginAuthMethods &
-  SkillCredentialMethods;
+  CredentialMethods;
 
 /**
  * Creates all database methods for all collections
@@ -68,7 +68,7 @@ export function createMethods(mongoose: typeof import('mongoose')): AllMethods {
     ...createAclEntryMethods(mongoose),
     ...createShareMethods(mongoose),
     ...createPluginAuthMethods(mongoose),
-    ...createSkillCredentialMethods(mongoose),
+    ...createCredentialMethods(mongoose),
   };
 }
 

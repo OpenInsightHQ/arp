@@ -1689,8 +1689,8 @@
   "com_arp_type_file": "文件",
   "com_ui_tab_task": "待办",
   "com_task_section_ai": "AI 待办",
-  "com_task_section_collab": "协作请求",
-  "com_task_section_manual": "我的任务",
+  "com_task_section_collab": "协作任务",
+  "com_task_section_manual": "手动任务",
   "com_task_status_pending": "待处理",
   "com_task_status_completed": "已完成",
   "com_task_status_approved": "已批准",
@@ -1704,8 +1704,6 @@
   "com_task_all_clear_hint": "目前没有待处理任务。当AI需要你的输入时，会自动通知你。",
   "com_task_section_my_ai": "我的AI待办",
   "com_task_section_other_ai": "来自他人的AI待办",
-  "com_task_section_collab": "协作任务",
-  "com_task_section_manual": "手动任务",
   "com_task_jump_conversation": "跳转对话",
   "com_task_respond": "回复",
   "com_task_view_result": "查看结果",
@@ -1720,5 +1718,7 @@
   "com_just_now": "刚刚",
   "com_min_ago": "分钟前",
   "com_hour_ago": "小时前",
-  "com_day_ago": "天前"
+  "com_day_ago": "天前",
+  "com_ui_credential_type_credential": "凭证",
+  "com_ui_credential_ref_desc": "被技能引用 - 绑定你自己的凭证值"
 }

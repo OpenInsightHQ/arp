@@ -10,6 +10,9 @@ const {
 } = require('~/models');
 const { findAccessibleResourceIds } = require('~/server/services/aclPrincipals');
 
+/** All-zero ObjectId sentinel marking admin-managed (shared) bindings — same value as pi/dmp. */
+const ADMIN_CREDENTIAL_USER_ID = '000000000000000000000000';
+
 /**
  * User-side credential controllers ("我的凭证").
  *
@@ -71,13 +74,63 @@ async function listCredentialResources(req, res) {
     }).lean();
 
     const resources = [];
+    const referencedRefs = new Set();
     for (const doc of skillDocs) {
       const status = await getCredentialStatus(userId, 'skill', doc.name);
       resources.push(toResourceView(doc, 'skill', { bound: status.configured, status }));
+      if (doc.credentialRef) {
+        referencedRefs.add(doc.credentialRef);
+      }
     }
     for (const doc of mcpDocs) {
       const status = await getCredentialStatus(userId, 'mcp', doc.serverName);
       resources.push(toResourceView(doc, 'mcp', { bound: status.configured, status }));
+      if (doc.credentialRef) {
+        referencedRefs.add(doc.credentialRef);
+      }
+    }
+
+    // Referenced credentials that are declaration-only (admin declared the
+    // fields but did not configure values): users bind their own values on
+    // the credential itself — resolution is either/or, admin values win.
+    if (referencedRefs.size > 0) {
+      const CredentialModel = mongoose.models.Credential;
+      if (CredentialModel) {
+        const declarationDocs = await CredentialModel.find({
+          userId: new mongoose.Types.ObjectId(ADMIN_CREDENTIAL_USER_ID),
+          resourceType: 'credential',
+          resourceName: { $in: [...referencedRefs] },
+          data: null,
+        }).lean();
+        const seenCreds = new Set(
+          resources.filter((r) => r.resourceType === 'credential').map((r) => r.resourceName),
+        );
+        for (const doc of declarationDocs) {
+          if (seenCreds.has(doc.resourceName)) {
+            continue;
+          }
+          seenCreds.add(doc.resourceName);
+          let schema = [];
+          if (doc.schemaJson) {
+            try {
+              schema = JSON.parse(doc.schemaJson);
+            } catch {
+              schema = [];
+            }
+          }
+          const status = await getCredentialStatus(userId, 'credential', doc.resourceName);
+          resources.push({
+            resourceType: 'credential',
+            resourceName: doc.resourceName,
+            displayName: doc.resourceName,
+            description: 'Referenced by skills — bind your own values',
+            userManaged: true,
+            credentialSchema: schema,
+            bound: status.configured,
+            status,
+          });
+        }
+      }
     }
 
     return res.json({ resources, cryptoConfigured: isCryptoConfigured() });
@@ -88,8 +141,8 @@ async function listCredentialResources(req, res) {
 }
 
 function validateResourceType(resourceType) {
-  if (resourceType !== 'skill' && resourceType !== 'mcp') {
-    return 'resourceType must be "skill" or "mcp"';
+  if (resourceType !== 'skill' && resourceType !== 'mcp' && resourceType !== 'credential') {
+    return 'resourceType must be "skill", "mcp" or "credential"';
   }
   return null;
 }

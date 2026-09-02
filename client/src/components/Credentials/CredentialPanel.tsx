@@ -53,6 +53,26 @@ export default function CredentialPanel() {
     );
   }, [data?.resources, trimmed]);
 
+  const typeTagClass = (resource: TCredentialResource) => {
+    if (resource.resourceType === 'skill') {
+      return 'bg-blue-500/15 text-blue-600 dark:text-blue-400';
+    }
+    if (resource.resourceType === 'credential') {
+      return 'bg-purple-500/15 text-purple-600 dark:text-purple-400';
+    }
+    return 'bg-amber-500/15 text-amber-600 dark:text-amber-400';
+  };
+
+  const typeTagLabel = (resource: TCredentialResource) => {
+    if (resource.resourceType === 'skill') {
+      return 'Skill';
+    }
+    if (resource.resourceType === 'credential') {
+      return localize('com_ui_credential_type_credential');
+    }
+    return 'MCP';
+  };
+
   const statusLabel = (resource: TCredentialResource) => {
     if (!resource.bound) {
       return (
@@ -139,12 +159,10 @@ export default function CredentialPanel() {
                 <span
                   className={cn(
                     'rounded px-1.5 py-0.5 text-[10px] font-medium uppercase',
-                    resource.resourceType === 'skill'
-                      ? 'bg-blue-500/15 text-blue-600 dark:text-blue-400'
-                      : 'bg-amber-500/15 text-amber-600 dark:text-amber-400',
+                    typeTagClass(resource),
                   )}
                 >
-                  {resource.resourceType}
+                  {typeTagLabel(resource)}
                 </span>
                 {resource.skillType && (
                   <span className="rounded bg-surface-tertiary px-1.5 py-0.5 text-[10px] text-text-secondary">
@@ -157,7 +175,9 @@ export default function CredentialPanel() {
               </div>
               {resource.description && (
                 <div className="mt-1 line-clamp-2 text-xs text-text-secondary">
-                  {resource.description}
+                  {resource.resourceType === 'credential'
+                    ? localize('com_ui_credential_ref_desc')
+                    : resource.description}
                 </div>
               )}
               <div className="mt-2 flex items-center gap-2 text-xs">

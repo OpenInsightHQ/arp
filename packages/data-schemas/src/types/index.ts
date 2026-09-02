@@ -29,7 +29,7 @@ export * from './systemPrompt';
 export * from './accessRole';
 export * from './aclEntry';
 /* Skill Credentials */
-export * from './skillCredential';
+export * from './credential';
 export * from './group';
 /* Web */
 export * from './web';
