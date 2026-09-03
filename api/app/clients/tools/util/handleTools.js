@@ -243,23 +243,30 @@ Rules:
         ),
     }),
     func: async ({ skillName, input }) => {
+      /**
+       * Non-resumable flows without a streamId (v2 OpenAI-compat controller)
+       * stash direct callbacks on the request: pi's live output is written to
+       * the active SSE response instead of the generation-job event bus.
+       */
+      const requestStreamCallbacks = streamId ? null : req?._piStreamCallbacks;
+
       const onChunk = streamId
         ? async (content) => {
             await emitStreamChunk(content);
           }
-        : undefined;
+        : requestStreamCallbacks?.onChunk;
 
       const onThinking = streamId
         ? async (thinkingData) => {
             await emitThinking(thinkingData);
           }
-        : undefined;
+        : requestStreamCallbacks?.onThinking;
 
       const onToolEvent = streamId
         ? async (toolData) => {
             await emitToolEvent(toolData);
           }
-        : undefined;
+        : requestStreamCallbacks?.onToolEvent;
 
       const result = await handlePIToolCall(
         {

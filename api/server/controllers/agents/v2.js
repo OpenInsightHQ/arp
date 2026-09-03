@@ -597,6 +597,18 @@ const V2ChatCompletionController = async (req, res) => {
       }
     };
 
+    /*
+      Wire pi skill live streaming into this response: createPITools falls
+      back to these callbacks when no resumable streamId exists, forwarding
+      execute_skill output/thinking as content/reasoning deltas (and into the
+      persisted text/reasoning via textChunks/reasoningChunks) instead of
+      swallowing them until the tool call returns.
+    */
+    req._piStreamCallbacks = {
+      onChunk: (content) => streamText(content),
+      onThinking: (thinkingData) => streamReasoning(thinkingData?.delta),
+    };
+
     const openaiHandlers = {
       on_message_delta: createAggregatingHandler(GraphEvents.ON_MESSAGE_DELTA, (data) => {
         const content = data?.delta?.content;
