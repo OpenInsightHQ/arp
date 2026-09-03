@@ -8,10 +8,11 @@
  *
  * This module watches that doc and, once the skill run finishes, appends the
  * canonical pi download links ("📎 下载文件：[📄 name](url)" markdown, built
- * from collectPiGeneratedFiles + buildPiFileDownloadUrl — identical to the
- * one-pi chat buildFileLinks surface) onto the agent's saved response message
- * text, so the links are visible on refresh without any file download or
- * attachment records.
+ * from collectPiGeneratedFiles + filterPiResultFiles + buildPiFileDownloadUrl
+ * — identical filtering rules to the one-pi chat buildFileLinks surface, minus
+ * the text-mention filter since the saved reply is the timeout placeholder)
+ * onto the agent's saved response message text, so the links are visible on
+ * refresh without any file download or attachment records.
  *
  * In-memory watcher: lost on process restart (best-effort; files remain
  * retrievable via the pi files API and later turns).
@@ -20,6 +21,7 @@ const { logger } = require('@librechat/data-schemas');
 const { TaskQueue } = require('../../models/TaskQueue');
 const {
   collectPiGeneratedFiles,
+  filterPiResultFiles,
   buildPiFileLinks,
   appendPiLinksToSavedMessage,
 } = require('./PIService');
@@ -106,8 +108,15 @@ const scheduleBackgroundSkillFileCollection = async ({
       }
     }
 
-    const links = await buildPiFileLinks(
-      await collectPiGeneratedFiles(agentId, sessionId, userId, new Date(startedAtMs)),
+    // No text-mention filter: the saved reply is the timeout placeholder
+    // ("still generating") and mentions no filenames. Hygiene filter only —
+    // hidden entries and intermediate artifacts (node_modules, skill
+    // work/temp dirs) dropped, basename dedupe, newest-first by mtime,
+    // capped at MAX_PI_RESULT_FILES.
+    const links = buildPiFileLinks(
+      filterPiResultFiles(
+        await collectPiGeneratedFiles(agentId, sessionId, userId, new Date(startedAtMs)),
+      ),
     );
     if (!links) {
       return;

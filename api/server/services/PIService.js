@@ -632,10 +632,24 @@ const readPrompt = async ({ key, userId, agentId }) => {
 };
 
 /**
+ * Entries never returned by listPiFiles: dependency installs (an in-skill
+ * `npm install` creates thousands of files) and dot segments (.git clones,
+ * .package-lock.json) are noise for every consumer — <attachments> prompt
+ * inventories, execute_code syncing and result-file footers alike. Skill
+ * work/temp dirs stay listed: the model must discover and read them in later
+ * turns; footers drop them separately via filterPiResultFiles.
+ */
+const isExcludedListPath = (filePath) =>
+  String(filePath || '')
+    .split('/')
+    .some((segment) => segment === 'node_modules' || (segment.length > 0 && segment.startsWith('.')));
+
+/**
  * Canonical recursive pi workspace file listing shared by every consumer
  * (collectPiGeneratedFiles, <attachments> prompts, execute_code syncing,
  * the read_text_file tool). Returns normalized records with canonical
- * download URLs (buildPiFileDownloadUrl).
+ * download URLs (buildPiFileDownloadUrl); dependency-install and dotfile
+ * entries are excluded at this source (isExcludedListPath).
  *
  * @param {string} agentId
  * @param {string} sessionId
@@ -674,7 +688,7 @@ const listPiFiles = async (agentId, sessionId, userId, modifiedSince) => {
 
     const data = await response.json();
     return (data.files || [])
-      .filter((f) => !f.isDirectory)
+      .filter((f) => !f.isDirectory && !isExcludedListPath(f.path || f.name))
       .map((f) => {
         const filePath = f.path || f.name;
         const mimeType = f.mimeType || null;
@@ -838,7 +852,8 @@ const PI_FILES_SINCE_GRACE_MS = 5 * 60_000;
 
 /**
  * List files generated in a pi session (recursive, optionally filtered by
- * mtime) as structured records with download URLs.
+ * mtime) as structured records with download URLs, `lastModified` kept so
+ * downstream selection (filterPiResultFiles) can sort by recency.
  *
  * Thin wrapper over the canonical listPiFiles, kept for existing consumers:
  * - execute_skill tool results (files attached to the agent message)
@@ -856,7 +871,7 @@ const collectPiGeneratedFiles = (agentId, sessionId, userId, modifiedSince) =>
     modifiedSince != null
       ? new Date(new Date(modifiedSince).getTime() - PI_FILES_SINCE_GRACE_MS)
       : undefined,
-  ).then((files) => files.map(({ lastModified: _lastModified, ...file }) => file));
+  );
 
 /** Backwards-compatible alias for existing executeSkill call sites. */
 const collectSkillFiles = collectPiGeneratedFiles;
@@ -880,26 +895,40 @@ const isMentionedInText = (name, text) => {
 
 /**
  * Intermediate-artifact directories created by skills during a run (unpack
- * workdirs, temp stages). Files under them are build intermediates, not
- * deliverables — excluded from result-file footers even when the skill's
- * prose mentions them (skills routinely narrate "edited sharedStrings.xml
- * in ./xlsx_work/" while the actual deliverable is the repacked original).
+ * workdirs, temp stages, in-skill dependency installs). Files under them are
+ * build intermediates, not deliverables — excluded from result-file footers
+ * even when the skill's prose mentions them (skills routinely narrate "edited
+ * sharedStrings.xml in ./xlsx_work/" while the actual deliverable is the
+ * repacked original; an in-skill `npm install` must not flood the footer
+ * with node_modules either).
  */
-const INTERMEDIATE_DIR_PATTERN = /(^|\/)([^/]*_work\d*|work|temp|tmp|\.tmp)(\/|$)/i;
+const INTERMEDIATE_DIR_PATTERN = /(^|\/)(node_modules|[^/]*_work\d*|work|temp|tmp|\.tmp)(\/|$)/i;
 
 const isIntermediateArtifact = (filePath) => INTERMEDIATE_DIR_PATTERN.test(String(filePath || ''));
 
+/** File mtime as a sortable number; missing/invalid mtimes sort oldest. */
+const mtimeOf = (file) => {
+  const t = Date.parse(file?.lastModified);
+  return Number.isNaN(t) ? 0 : t;
+};
+
 /**
  * Shared post-processing for pi file lists:
+ * - hygiene filter (both modes): drop hidden entries and intermediate
+ *   artifacts (node_modules, skill work/temp dirs)
  * - optional text filter: keep only files whose basename or path is mentioned
  *   in `text` (whole-token match; pass null/undefined to keep all). The text
  *   must be the assistant's PROSE output — never tool_call output, which
  *   enumerates every workspace file and would defeat the filter.
+ * - sort by lastModified desc (stable; missing mtimes last) before dedupe, so
+ *   basename duplicates collapse onto their newest copy and the cap keeps
+ *   the most recent deliverables
  * - dedupe by basename
  * - truncate to MAX_PI_RESULT_FILES
  *
- * Used by one-pi buildFileLinks, execute_skill footers and
- * GallerySkillTaskRun.files so all surfaces apply identical filtering rules.
+ * Used by one-pi buildFileLinks, execute_skill footers, BackgroundSkillFiles
+ * and GallerySkillTaskRun.files so all surfaces apply identical filtering
+ * rules.
  */
 const filterPiResultFiles = (files, text = null) => {
   if (!files || files.length === 0) {
@@ -908,16 +937,18 @@ const filterPiResultFiles = (files, text = null) => {
 
   const isHiddenEntry = (f) => ((f.path || f.name || '').split('/').pop() || '').startsWith('.');
 
-  const pool =
-    text != null
-      ? files.filter((f) => {
-          if (isIntermediateArtifact(f.path || f.name) || isHiddenEntry(f)) {
-            return false;
-          }
-          const basename = (f.path || f.name || '').split('/').pop();
-          return isMentionedInText(basename, text) || isMentionedInText(f.path, text);
-        })
-      : files.filter((f) => !isHiddenEntry(f));
+  const pool = files.filter((f) => {
+    if (isHiddenEntry(f) || isIntermediateArtifact(f.path || f.name)) {
+      return false;
+    }
+    if (text == null) {
+      return true;
+    }
+    const basename = (f.path || f.name || '').split('/').pop();
+    return isMentionedInText(basename, text) || isMentionedInText(f.path, text);
+  });
+
+  pool.sort((a, b) => mtimeOf(b) - mtimeOf(a));
 
   const seen = new Set();
   const uniqueFiles = [];
@@ -1154,7 +1185,12 @@ const executeSkill = async (
       logger.info(
         `[PIService] executeSkill deadline (${deadlineMs}ms) reached for ${skillName}; continuing in background`,
       );
-      const filesSoFar = await collectSkillFiles(finalAgentId, sessionId, userId, startedAt);
+      // Hygiene filter (no summary text exists yet): in-skill npm installs
+      // and unpack dirs must not flood the tool output's Generated Files
+      // list; newest-first cap keeps it bounded.
+      const filesSoFar = filterPiResultFiles(
+        await collectSkillFiles(finalAgentId, sessionId, userId, startedAt),
+      );
       return {
         success: true,
         background: true,
@@ -1172,7 +1208,9 @@ const executeSkill = async (
       };
     }
 
-    const files = await collectSkillFiles(finalAgentId, sessionId, userId, startedAt);
+    const files = filterPiResultFiles(
+      await collectSkillFiles(finalAgentId, sessionId, userId, startedAt),
+    );
 
     return {
       success: true,
