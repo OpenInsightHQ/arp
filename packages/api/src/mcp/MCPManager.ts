@@ -19,6 +19,85 @@ import { formatToolContent } from './parsers';
 import { MCPConnection } from './connection';
 import { processMCPEnv } from '~/utils/env';
 
+/** All-zero ObjectId sentinel marking admin-managed (shared) credential bindings — same value as pi/dmp. */
+const ADMIN_CREDENTIAL_USER_ID = '000000000000000000000000';
+
+/** Resolved credential headers cache: `${userId}:${serverName}` → { headers, expiresAt }. */
+const credentialHeaderCache = new Map<
+  string,
+  { headers: Record<string, string>; expiresAt: number }
+>();
+const CREDENTIAL_HEADER_TTL_MS = 5 * 60 * 1000;
+
+/**
+ * Resolves dmp-style credential-reference headers for one MCP server/user
+ * (either/or: admin-configured credential values win, otherwise the user's
+ * own binding). Mirrors pi's buildCredentialHeaders contract: mapped fields
+ * use credentialBinding.headerMap, unmapped fields use their own field name.
+ */
+async function resolveCredentialHeaders(
+  serverName: string,
+  userId?: string,
+): Promise<Record<string, string>> {
+  const cacheKey = `${userId ?? 'anon'}:${serverName}`;
+  const cached = credentialHeaderCache.get(cacheKey);
+  if (cached && Date.now() < cached.expiresAt) {
+    return cached.headers;
+  }
+  const headers: Record<string, string> = {};
+  try {
+    const { findMCPServerByServerName, getCredentialValues } = (await import('~/models')) as {
+      findMCPServerByServerName: (serverName: string) => Promise<Record<string, unknown> | null>;
+      getCredentialValues: (
+        userId: string,
+        resourceType: string,
+        resourceName: string,
+      ) => Promise<Record<string, string> | null>;
+    };
+    const server = await findMCPServerByServerName(serverName);
+    if (
+      server &&
+      server.requiresCredentials === true &&
+      typeof server.credentialRef === 'string' &&
+      server.credentialRef
+    ) {
+      const ref = server.credentialRef;
+      const values =
+        (await getCredentialValues(ADMIN_CREDENTIAL_USER_ID, 'credential', ref)) ??
+        (userId ? await getCredentialValues(userId, 'credential', ref) : null);
+      if (values) {
+        const binding = server.credentialBinding ?? {};
+        if (binding.authType === 'bearer') {
+          const schema = server.credentialSchema ?? [];
+          const bearerKey =
+            schema.find((f: { sensitive?: boolean }) => f.sensitive)?.secretKey ??
+            Object.keys(values)[0];
+          const token = values[bearerKey];
+          if (token) {
+            headers.Authorization = `Bearer ${token}`;
+          }
+        } else {
+          const headerMap: Record<string, string> = binding.headerMap ?? {};
+          for (const [secretKey, value] of Object.entries(values)) {
+            if (!value) {
+              continue;
+            }
+            const headerName = headerMap[secretKey] || secretKey;
+            headers[headerName] = value;
+          }
+        }
+      }
+    }
+  } catch (error) {
+    logger.debug('[MCPManager] resolveCredentialHeaders failed:', (error as Error).message);
+  }
+  credentialHeaderCache.set(cacheKey, {
+    headers,
+    expiresAt: Date.now() + CREDENTIAL_HEADER_TTL_MS,
+  });
+  return headers;
+}
+
 /**
  * Centralized manager for MCP server connections and tool execution.
  * Extends UserConnectionManager to handle both app-level and user-specific connections.
@@ -324,7 +403,31 @@ Please follow these instructions when using tools from the respective MCP server
 
       const existingHeaders =
         'headers' in currentOptions ? (currentOptions.headers as Record<string, string>) || {} : {};
-      connection.setRequestHeaders({ ...defaultHeaders, ...existingHeaders });
+
+      // dmp-style credential references (dmp-mcp2 etc.): merge resolved
+      // credential headers; replace leftover {{MCP_API_KEY}} placeholders
+      // with the credential value, or drop the header when unresolvable.
+      // User-supplied keys (arp MCP settings) take priority over credential
+      // fallbacks — credential headers only fill missing keys.
+      const credentialHeaders = await resolveCredentialHeaders(serverName, userId);
+      const mergedHeaders: Record<string, string> = { ...existingHeaders };
+      for (const [key, value] of Object.entries(mergedHeaders)) {
+        if (typeof value === 'string' && value.includes('{{MCP_API_KEY}}')) {
+          const credValue = Object.values(credentialHeaders)[0];
+          if (credValue) {
+            mergedHeaders[key] = value.split('{{MCP_API_KEY}}').join(credValue);
+          } else {
+            delete mergedHeaders[key];
+          }
+        }
+      }
+      const finalHeaders: Record<string, string> = { ...defaultHeaders, ...mergedHeaders };
+      for (const [key, value] of Object.entries(credentialHeaders)) {
+        if (!(key in finalHeaders)) {
+          finalHeaders[key] = value;
+        }
+      }
+      connection.setRequestHeaders(finalHeaders);
 
       const result = await connection.client.request(
         {
