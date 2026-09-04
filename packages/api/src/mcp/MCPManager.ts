@@ -139,7 +139,24 @@ export class MCPManager extends UserConnectionManager {
     if (existingAppConnection) {
       return existingAppConnection;
     } else if (args.user?.id) {
-      return this.getUserConnection(args as Parameters<typeof this.getUserConnection>[0]);
+      const connection = await this.getUserConnection(
+        args as Parameters<typeof this.getUserConnection>[0],
+      );
+      // dmp-style credential references: apply auth headers at the connection
+      // level too, so the initialize handshake and tools/list (fetchTools,
+      // reinitialize flow) authenticate — not only per tool call.
+      const credentialHeaders = await resolveCredentialHeaders(args.serverName, args.user.id);
+      if (Object.keys(credentialHeaders).length > 0) {
+        const existing = connection.getRequestHeaders() ?? {};
+        const merged = { ...existing };
+        for (const [key, value] of Object.entries(credentialHeaders)) {
+          if (!(key in merged) || (merged[key] ?? '').includes('{{')) {
+            merged[key] = value;
+          }
+        }
+        connection.setRequestHeaders(merged);
+      }
+      return connection;
     } else {
       throw new McpError(
         ErrorCode.InvalidRequest,
