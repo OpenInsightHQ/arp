@@ -1045,7 +1045,7 @@ const executeSkill = async (
   // no disconnect abort): its messages still persist at parentMessageId and
   // the skill task (created by pi for /skill: turns) keeps updating the task
   // panel. 0 disables the deadline (wait forever).
-  const deadlineMs = Number(process.env.PI_SKILL_TIMEOUT_MS ?? 60_000);
+  const deadlineMs = Number(process.env.PI_SKILL_TIMEOUT_MS ?? 600_000);
   let timedOut = false;
 
   try {
