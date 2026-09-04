@@ -53,10 +53,15 @@ async function listCredentialResources(req, res) {
   try {
     const userId = req.user.id;
 
-    const [accessibleSkillIds, accessibleMcpIds] = await Promise.all([
+    const [accessibleSkillIds, registryMcpDocs] = await Promise.all([
       findAccessibleResourceIds(userId, 'skill'),
-      findAccessibleResourceIds(userId, 'mcp'),
+      // MCP visibility resolves through the unified skills registry (dmp
+      // grants MCP-skill ACLs as resourceType "skill", NOT "mcp").
+      getSkillModel().find({ skillType: 'mcp' }).select('name _id').lean(),
     ]);
+    const accessibleMcpNames = new Set(
+      registryMcpDocs.filter((d) => accessibleSkillIds.includes(String(d._id))).map((d) => d.name),
+    );
 
     const skillDocs = await getSkillModel()
       .find({
@@ -70,7 +75,7 @@ async function listCredentialResources(req, res) {
     const mcpDocs = await mongoose.models.MCPServer.find({
       requiresCredentials: true,
       userManaged: { $ne: false },
-      $or: [{ author: userId }, { _id: { $in: accessibleMcpIds } }],
+      $or: [{ author: userId }, { serverName: { $in: [...accessibleMcpNames] } }],
     }).lean();
 
     const resources = [];

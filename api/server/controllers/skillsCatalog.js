@@ -71,10 +71,19 @@ async function getSkillsCatalog(req, res) {
 
     await syncPiPersonalSkills(userId);
 
-    const [accessibleSkillIds, accessibleMcpIds] = await Promise.all([
+    const [accessibleSkillIds, registryMcpDocs] = await Promise.all([
       findAccessibleResourceIds(userId, 'skill'),
-      findAccessibleResourceIds(userId, 'mcp'),
+      // MCP visibility resolves through the unified skills registry (dmp
+      // grants MCP-skill ACLs as resourceType "skill", NOT "mcp").
+      getSkillModel().find({ skillType: 'mcp' }).select('name _id').lean(),
     ]);
+    const registryIdByServerName = new Map(registryMcpDocs.map((d) => [d.name, String(d._id)]));
+    const accessibleMcpIds = [];
+    for (const [serverName, registryId] of registryIdByServerName.entries()) {
+      if (accessibleSkillIds.includes(registryId)) {
+        accessibleMcpIds.push(serverName);
+      }
+    }
 
     const skillQuery = { status: 1 };
     if (source === 'created') {
@@ -125,10 +134,10 @@ async function getSkillsCatalog(req, res) {
       if (source === 'created') {
         mcpQuery.author = userId;
       } else if (source === 'authorized') {
-        mcpQuery._id = { $in: accessibleMcpIds };
+        mcpQuery.serverName = { $in: accessibleMcpIds };
         mcpQuery.author = { $ne: userId };
       } else {
-        mcpQuery.$or = [{ author: userId }, { _id: { $in: accessibleMcpIds } }];
+        mcpQuery.$or = [{ author: userId }, { serverName: { $in: accessibleMcpIds } }];
       }
       const mcpDocs = await mongoose.models.MCPServer.find(mcpQuery).lean();
       for (const doc of mcpDocs) {
